@@ -3,7 +3,6 @@
 // ======================================================
 
 import React, { useState } from 'react';
-
 import {
   Alert,
   Platform,
@@ -20,15 +19,12 @@ import { router } from 'expo-router';
 // ======================================================
 // SUPABASE
 // ======================================================
-
 import { supabase } from '../../lib/supabase';
 
 // ======================================================
 // SCREEN
 // ======================================================
-
 export default function SignupScreen() {
-
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -39,42 +35,100 @@ export default function SignupScreen() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // ======================================================
+  // EMAIL SIGNUP
+  // ======================================================
   const handleSignup = async () => {
-    // Basic structural check only
     if (!firstName || !lastName || !email || !password || !confirmPassword) {
-      if (Platform.OS === 'web') {
-        alert('Please fill out all fields.');
-      } else {
-        Alert.alert('Missing Information', 'Please fill out all fields.');
-      }
+      if (Platform.OS === 'web') alert('Please fill out all fields.');
+      else Alert.alert('Missing Information', 'Please fill out all fields.');
       return;
     }
+
+    if (password !== confirmPassword) {
+      if (Platform.OS === 'web') alert('Passwords do not match.');
+      else Alert.alert('Password Mismatch', 'Passwords do not match.');
+      return;
+    }
+
+    const cleanEmail = email.trim();
 
     try {
       setLoading(true);
 
-      // 1. Tell Supabase to send the verification email
-      await supabase.auth.signUp({
-        email,
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
         password,
         options: {
           data: {
             first_name: firstName,
             last_name: lastName,
           },
-          emailRedirectTo: 'http://localhost:8081/login',
+          emailRedirectTo: 'myapp://login',
         },
       });
 
+      if (error) {
+        Alert.alert('Signup Error', error.message);
+        setLoading(false);
+        return;
+      }
+
+      if (!data?.user) {
+        Alert.alert('Signup Failed', 'No user returned.');
+        setLoading(false);
+        return;
+      }
+
       setLoading(false);
 
-      // 2. Go directly to the welcome mat screen no matter what
-      router.push('/welcome_mat');
-
-    } catch (err: any) {
+      router.push({
+        pathname: '/welcome_mat',
+        params: { email: cleanEmail },
+      });
+    } catch (err) {
+      console.error(err);
       setLoading(false);
-      // Silently pass to welcome mat even if network errors or limits happen
-      router.push('/welcome_mat');
+    }
+  };
+
+  // ======================================================
+  // GOOGLE OAUTH
+  // ======================================================
+  const handleGoogleSignup = async () => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: 'myapp://login',
+        },
+      });
+
+      if (error) {
+        Alert.alert('Google Sign-In Error', error.message);
+      }
+    } catch (err) {
+      Alert.alert('Google Error', 'Something went wrong.');
+    }
+  };
+
+  // ======================================================
+  // APPLE OAUTH
+  // ======================================================
+  const handleAppleSignup = async () => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'apple',
+        options: {
+          redirectTo: 'myapp://login',
+        },
+      });
+
+      if (error) {
+        Alert.alert('Apple Sign-In Error', error.message);
+      }
+    } catch (err) {
+      Alert.alert('Apple Error', 'Something went wrong.');
     }
   };
 
@@ -161,17 +215,36 @@ export default function SignupScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* BUTTON */}
+        {/* CREATE ACCOUNT */}
         <TouchableOpacity style={styles.button} onPress={handleSignup}>
           <Text style={styles.buttonText}>
             {loading ? 'CREATING ACCOUNT...' : 'CREATE ACCOUNT'}
           </Text>
+        </TouchableOpacity>
+
+        {/* GOOGLE */}
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#DB4437', marginTop: 20 }]}
+          onPress={handleGoogleSignup}
+        >
+          <Text style={styles.buttonText}>CONTINUE WITH GOOGLE</Text>
+        </TouchableOpacity>
+
+        {/* APPLE */}
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#000000', marginTop: 10 }]}
+          onPress={handleAppleSignup}
+        >
+          <Text style={styles.buttonText}>CONTINUE WITH APPLE</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
 
+// ======================================================
+// STYLES
+// ======================================================
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -216,15 +289,17 @@ const styles = StyleSheet.create({
   },
   button: {
     marginTop: 10,
-    height: 65,
-    borderRadius: 22,
+    height: 52,
+    width: '70%',
+    alignSelf: 'center',
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#7B42F6',
   },
   buttonText: {
     color: '#FFFFFF',
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     letterSpacing: 1,
   },
