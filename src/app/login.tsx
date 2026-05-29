@@ -12,11 +12,8 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-<<<<<<< Updated upstream
-=======
-  Alert,
+ Alert,
   ActivityIndicator,
->>>>>>> Stashed changes
 } from 'react-native';
 
 import {
@@ -28,7 +25,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { Href, useRouter } from 'expo-router';
-
+import { supabase } from '../../lib/supabase';
 // =======================
 // LOGIN SCREEN
 // =======================
@@ -99,11 +96,11 @@ export default function LoginScreen() {
   });
 
   // =======================
-<<<<<<< Updated upstream
+
   // SCREEN UI
   // =======================
 
-=======
+
   // EMAIL SIGN IN (DATABASE CHECK)
   // =======================
 
@@ -171,7 +168,7 @@ export default function LoginScreen() {
     }
   };
 
->>>>>>> Stashed changes
+
   return (
 
     <View style={styles.container}>
@@ -324,18 +321,18 @@ export default function LoginScreen() {
 
           </Animated.View>
 
-<<<<<<< Updated upstream
+
           <Text style={styles.signInText}>
             SIGN IN
           </Text>
 
-=======
+
           {loading ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
             <Text style={styles.signInText}>SIGN IN</Text>
           )}
->>>>>>> Stashed changes
+
         </TouchableOpacity>
 
         {/* =======================
