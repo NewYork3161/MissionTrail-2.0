@@ -497,17 +497,56 @@ function renderBottomTabBar() {
   return (
     <View style={styles.tabBar}>
       {bottomTabs.map((tab) => {
+
         const isActiveTab = tab.key === 'home';
 
         return (
-          <Pressable key={tab.key} style={({ pressed }) => [styles.tabButton, pressed && styles.pressed]}>
-            <View style={[styles.tabIconWrap, isActiveTab && styles.activeTabIconWrap]}>
-              <Image source={tab.image} style={styles.tabIcon} resizeMode="contain" />
+          <Pressable
+            key={tab.key}
+            style={({ pressed }) => [
+              styles.tabButton,
+              pressed && styles.pressed
+            ]}
+
+            onPress={() => {
+
+              if (tab.key === 'profile') {
+                router.push('/profile');
+              }
+
+              if (tab.key === 'home') {
+                router.push('/home');
+              }
+
+              if (tab.key === 'map') {
+                router.push('/home-backup');
+              }
+
+            }}
+          >
+            <View
+              style={[
+                styles.tabIconWrap,
+                isActiveTab && styles.activeTabIconWrap
+              ]}
+            >
+              <Image
+                source={tab.image}
+                style={styles.tabIcon}
+                resizeMode="contain"
+              />
             </View>
 
-            <Text style={[styles.tabLabel, isActiveTab && styles.activeTabLabel]} numberOfLines={1}>
+            <Text
+              style={[
+                styles.tabLabel,
+                isActiveTab && styles.activeTabLabel
+              ]}
+              numberOfLines={1}
+            >
               {tab.label}
             </Text>
+
           </Pressable>
         );
       })}
