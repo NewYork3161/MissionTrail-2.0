@@ -3,6 +3,7 @@
 // =======================
 
 import React, { useEffect, useRef, useState } from 'react';
+import * as LocalAuthentication from 'expo-local-authentication';
 
 import {
   Animated,
@@ -167,7 +168,52 @@ export default function LoginScreen() {
       Alert.alert('Apple Sign In Error', error.message);
     }
   };
+const handleBiometricSignIn = async () => {
 
+  const compatible =
+    await LocalAuthentication.hasHardwareAsync();
+
+  if (!compatible) {
+    Alert.alert(
+      'Unavailable',
+      'Biometric hardware not found.'
+    );
+    return;
+  }
+
+  const enrolled =
+    await LocalAuthentication.isEnrolledAsync();
+
+  if (!enrolled) {
+    Alert.alert(
+      'Unavailable',
+      'No fingerprint or Face ID enrolled.'
+    );
+    return;
+  }
+
+  const result =
+    await LocalAuthentication.authenticateAsync({
+
+      promptMessage:'Biometric Login',
+
+      fallbackLabel:'Use Password',
+
+    });
+
+  if (result.success) {
+
+    router.replace('/home-backup' as Href);
+
+  } else {
+
+    Alert.alert(
+      'Failed',
+      'Authentication failed.'
+    );
+
+  }
+};
 
   return (
 
@@ -322,10 +368,7 @@ export default function LoginScreen() {
           </Animated.View>
 
 
-          <Text style={styles.signInText}>
-            SIGN IN
-          </Text>
-
+          
 
           {loading ? (
             <ActivityIndicator color="#FFFFFF" />

@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { router } from 'expo-router';
 
 import {
     Dimensions,
@@ -565,15 +566,22 @@ const styles = StyleSheet.create({
   },
 
   cosmicOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(18, 10, 46, 0.18)',
-  },
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  backgroundColor: 'rgba(18, 10, 46, 0.18)',
+},
 
-  fixedOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    paddingHorizontal: sidePadding,
-  },
-
+fixedOverlay: {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  paddingHorizontal: sidePadding,
+},
   topOverlay: {
     position: 'absolute',
     left: sidePadding,
