@@ -13,12 +13,10 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-<<<<<<< HEAD
   Alert,
-=======
- Alert,
+  Alert,
   ActivityIndicator,
->>>>>>> michael
+
 } from 'react-native';
 
 import {
