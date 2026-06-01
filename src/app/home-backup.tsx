@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { router } from 'expo-router';
 
 import {
     Dimensions,
@@ -497,17 +498,56 @@ function renderBottomTabBar() {
   return (
     <View style={styles.tabBar}>
       {bottomTabs.map((tab) => {
+
         const isActiveTab = tab.key === 'home';
 
         return (
-          <Pressable key={tab.key} style={({ pressed }) => [styles.tabButton, pressed && styles.pressed]}>
-            <View style={[styles.tabIconWrap, isActiveTab && styles.activeTabIconWrap]}>
-              <Image source={tab.image} style={styles.tabIcon} resizeMode="contain" />
+          <Pressable
+            key={tab.key}
+            style={({ pressed }) => [
+              styles.tabButton,
+              pressed && styles.pressed
+            ]}
+
+            onPress={() => {
+
+              if (tab.key === 'profile') {
+                router.push('/profile');
+              }
+
+              if (tab.key === 'home') {
+                router.push('/home');
+              }
+
+              if (tab.key === 'map') {
+                router.push('/home-backup');
+              }
+
+            }}
+          >
+            <View
+              style={[
+                styles.tabIconWrap,
+                isActiveTab && styles.activeTabIconWrap
+              ]}
+            >
+              <Image
+                source={tab.image}
+                style={styles.tabIcon}
+                resizeMode="contain"
+              />
             </View>
 
-            <Text style={[styles.tabLabel, isActiveTab && styles.activeTabLabel]} numberOfLines={1}>
+            <Text
+              style={[
+                styles.tabLabel,
+                isActiveTab && styles.activeTabLabel
+              ]}
+              numberOfLines={1}
+            >
               {tab.label}
             </Text>
+
           </Pressable>
         );
       })}
@@ -526,15 +566,22 @@ const styles = StyleSheet.create({
   },
 
   cosmicOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(18, 10, 46, 0.18)',
-  },
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  backgroundColor: 'rgba(18, 10, 46, 0.18)',
+},
 
-  fixedOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    paddingHorizontal: sidePadding,
-  },
-
+fixedOverlay: {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  paddingHorizontal: sidePadding,
+},
   topOverlay: {
     position: 'absolute',
     left: sidePadding,

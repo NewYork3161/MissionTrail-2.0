@@ -3,6 +3,7 @@
 // =======================
 
 import React, { useEffect, useRef, useState } from 'react';
+import * as LocalAuthentication from 'expo-local-authentication';
 
 import {
   Animated,
@@ -12,7 +13,12 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+<<<<<<< HEAD
   Alert,
+=======
+ Alert,
+  ActivityIndicator,
+>>>>>>> michael
 } from 'react-native';
 
 import {
@@ -24,7 +30,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { Href, useRouter } from 'expo-router';
-
+import { supabase } from '../../lib/supabase';
 // =======================
 // SUPABASE
 // =======================
@@ -42,6 +48,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const gradientAnim = useRef(new Animated.Value(0)).current;
 
@@ -68,14 +75,63 @@ export default function LoginScreen() {
   });
 
   // =======================
+<<<<<<< HEAD
   // GOOGLE SIGN IN
   // =======================
 
+=======
+
+  // SCREEN UI
+  // =======================
+
+
+  // EMAIL SIGN IN (DATABASE CHECK)
+  // =======================
+
+  const handleSignIn = async () => {
+    // Stops empty fields and password bypass dead in their tracks
+    if (!email.trim() || !password.trim()) {
+      Alert.alert('Missing Fields', 'Please enter your email and password.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password: password,
+      });
+
+      if (error) {
+        Alert.alert('Login Failed', error.message);
+        setLoading(false);
+        return;
+      }
+
+      // Explicitly forcing screen route swap fallback
+      setLoading(false);
+      router.replace('/home-backup' as Href);
+    } catch (err) {
+      Alert.alert('Error', 'An unexpected system error occurred.');
+      setLoading(false);
+    }
+  };
+
+  // =======================
+  // GOOGLE SIGN IN
+  // =======================
+
+>>>>>>> michael
   const handleGoogleSignIn = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
+<<<<<<< HEAD
         redirectTo: 'myapp://login',
+=======
+        redirectTo: 'myapp://home-backup',
+>>>>>>> michael
       },
     });
 
@@ -92,7 +148,11 @@ export default function LoginScreen() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'apple',
       options: {
+<<<<<<< HEAD
         redirectTo: 'myapp://login',
+=======
+        redirectTo: 'myapp://home-backup',
+>>>>>>> michael
       },
     });
 
@@ -100,6 +160,55 @@ export default function LoginScreen() {
       Alert.alert('Apple Sign In Error', error.message);
     }
   };
+<<<<<<< HEAD
+=======
+const handleBiometricSignIn = async () => {
+
+  const compatible =
+    await LocalAuthentication.hasHardwareAsync();
+
+  if (!compatible) {
+    Alert.alert(
+      'Unavailable',
+      'Biometric hardware not found.'
+    );
+    return;
+  }
+
+  const enrolled =
+    await LocalAuthentication.isEnrolledAsync();
+
+  if (!enrolled) {
+    Alert.alert(
+      'Unavailable',
+      'No fingerprint or Face ID enrolled.'
+    );
+    return;
+  }
+
+  const result =
+    await LocalAuthentication.authenticateAsync({
+
+      promptMessage:'Biometric Login',
+
+      fallbackLabel:'Use Password',
+
+    });
+
+  if (result.success) {
+
+    router.replace('/home-backup' as Href);
+
+  } else {
+
+    Alert.alert(
+      'Failed',
+      'Authentication failed.'
+    );
+
+  }
+};
+>>>>>>> michael
 
   return (
     <View style={styles.container}>
@@ -124,6 +233,8 @@ export default function LoginScreen() {
             style={styles.input}
             placeholder="Email"
             placeholderTextColor="#777"
+            autoCapitalize="none"
+            keyboardType="email-address"
             value={email}
             onChangeText={setEmail}
           />
@@ -137,6 +248,7 @@ export default function LoginScreen() {
             placeholder="Password"
             placeholderTextColor="#777"
             secureTextEntry={!showPassword}
+            autoCapitalize="none"
             value={password}
             onChangeText={setPassword}
           />
@@ -157,7 +269,8 @@ export default function LoginScreen() {
         {/* SIGN IN */}
         <TouchableOpacity
           style={styles.signInWrapper}
-          onPress={() => router.replace('/home-backup' as Href)}
+          onPress={handleSignIn}
+          disabled={loading}
         >
           <Animated.View
             style={{
@@ -175,7 +288,19 @@ export default function LoginScreen() {
             />
           </Animated.View>
 
+<<<<<<< HEAD
           <Text style={styles.signInText}>SIGN IN</Text>
+=======
+
+          
+
+          {loading ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.signInText}>SIGN IN</Text>
+          )}
+
+>>>>>>> michael
         </TouchableOpacity>
 
         {/* BIOMETRICS */}
