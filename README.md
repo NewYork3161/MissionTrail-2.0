@@ -12,7 +12,7 @@
 
 ## About Mission Trails
 
-Mission Trails is a location-based exploration and fitness mobile application designed to turn real-world movement into an interactive adventure.
+Missionv Trails is a location-based exploration and fitness mobile application designed to turn real-world movement into an interactive adventure.
 
 The app is built around the idea that fitness should feel exciting, rewarding, and social instead of repetitive. Instead of only tracking steps, calories, or workout numbers, Mission Trails uses movement as part of a larger exploration system. Users walk, explore, complete missions, unlock collectibles, level up companions, and build progress through outdoor activity.
 
