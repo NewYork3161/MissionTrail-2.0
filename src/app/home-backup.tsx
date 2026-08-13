@@ -2,6 +2,10 @@
 // IMPORTS
 // =======================
 
+// =======================
+// IMPORTS
+// =======================
+
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -34,8 +38,15 @@ import {
   Text,
   View,
 } from 'react-native';
-
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import {
+  MapView,
+  Marker,
+  Polyline,
+  Circle,
+  PROVIDER_GOOGLE,
+} from '@/components/Map';
 
 // Chatbot popup component
 import { RelicAwakening } from '@/components/relic-awakening';
@@ -72,27 +83,6 @@ type PlacedRelic = {
   coordinate: Coordinate;
 };
 
-// =======================
-// MAP SETUP
-// =======================
-
-let MapView: any = View;
-let Marker: any = View;
-let Polyline: any = View;
-let Circle: any = View;
-let PROVIDER_GOOGLE: any = null;
-
-if (Platform.OS !== 'web') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const Maps = require('react-native-maps');
-
-  MapView = Maps.default;
-  Marker = Maps.Marker;
-  Polyline = Maps.Polyline;
-  Circle = Maps.Circle;
-  PROVIDER_GOOGLE = Maps.PROVIDER_GOOGLE;
-}
-
 type NeonIconName =
   React.ComponentProps<typeof Ionicons>['name'];
 
@@ -114,15 +104,10 @@ const tabBarHeight =
 
 const tabImages = {
   home: require('../../assets/images/tabIcons/homemain.png'),
-
   mission: require('../../assets/images/tabIcons/mission.png'),
-
   trails: require('../../assets/images/tabIcons/trails.png'),
-
   vault: require('../../assets/images/tabIcons/vault.png'),
-
   profile: require('../../assets/images/tabIcons/profile.png'),
-
   companion: require('../../assets/images/tabIcons/companion.png'),
 };
 
@@ -158,35 +143,30 @@ const bottomTabs = [
     image: tabImages.home,
     route: '/home-backup',
   },
-
   {
     key: 'mission',
     label: 'Mission',
     image: tabImages.mission,
     route: '/mission',
   },
-
   {
     key: 'trails',
     label: 'Trails',
     image: tabImages.trails,
     route: '/trails',
   },
-
   {
     key: 'vault',
     label: 'Vault',
     image: tabImages.vault,
     route: '/vault',
   },
-
   {
     key: 'profile',
     label: 'Profile',
     image: tabImages.profile,
     route: '/profile',
   },
-
   {
     key: 'companion',
     label: 'Compan...',

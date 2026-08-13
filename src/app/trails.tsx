@@ -12,6 +12,12 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  MapView,
+  PROVIDER_GOOGLE,
+} from '@/components/Map';
+
+
 
 import { MissionBottomTabBar } from '@/components/mission-bottom-tab-bar';
 import { TrailCard } from '@/components/trails/trail-card';
@@ -26,15 +32,6 @@ import { saveSelectedTrail } from '@/services/selected-trail-service';
 import { startTrailActivity } from '@/services/trail-activity-service';
 import type { Trail } from '@/types/trails';
 
-let MapView: any = View;
-let PROVIDER_GOOGLE: unknown = null;
-if (Platform.OS !== 'web') {
-  // react-native-maps is already installed and used by the Live Map screen.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const Maps = require('react-native-maps');
-  MapView = Maps.default;
-  PROVIDER_GOOGLE = Maps.PROVIDER_GOOGLE;
-}
 
 type ViewMode = 'list' | 'map';
 
