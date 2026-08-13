@@ -40,9 +40,9 @@ export default function SplashScreen() {
 
   const handleEnter = () => {
 
-    router.replace('/login');
+  router.replace('/onboarding_user_info');
 
-  };
+};
 
   return (
 

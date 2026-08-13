@@ -3,6 +3,7 @@ import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useRef, useState } from 'react';
+
 import {
   ActivityIndicator,
   Alert,
@@ -13,7 +14,15 @@ import {
   Text,
   View,
 } from 'react-native';
+
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import {
+  MapView,
+  Marker,
+  Polyline,
+  PROVIDER_GOOGLE,
+} from '@/components/Map';
 
 import { CreateMeetupModal } from '@/components/trails/create-meetup-modal';
 import { TrailMeetupCard } from '@/components/trails/trail-meetup-card';
@@ -29,20 +38,15 @@ import {
   type CreateMeetupInput,
 } from '@/services/trail-data-service';
 import { startTrailActivity } from '@/services/trail-activity-service';
-import type { HikingRoute, Trail, TrailAmenity, TrailMeetup, TrailSearchCoordinate } from '@/types/trails';
+import type {
+  HikingRoute,
+  Trail,
+  TrailAmenity,
+  TrailMeetup,
+  TrailSearchCoordinate,
+} from '@/types/trails';
 
-let MapView: any = View;
-let Marker: any = View;
-let Polyline: any = View;
-let PROVIDER_GOOGLE: unknown = null;
-if (Platform.OS !== 'web') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const Maps = require('react-native-maps');
-  MapView = Maps.default;
-  Marker = Maps.Marker;
-  Polyline = Maps.Polyline;
-  PROVIDER_GOOGLE = Maps.PROVIDER_GOOGLE;
-}
+
 
 // This screen presents one trail and manages its route, safety, and meetup actions.
 export default function TrailDetailsScreen() {

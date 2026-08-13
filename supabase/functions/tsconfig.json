@@ -12,4 +12,3 @@
   "include": ["**/*.ts", "deno.d.ts"],
   "exclude": ["**/*.test.ts"]
 }
-
