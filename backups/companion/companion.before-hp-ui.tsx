@@ -23,30 +23,6 @@ export default function CompanionScreen() {
   const companion = progress?.companion;
   const companionName = formatCompanionName(companion?.companionId);
 
-  const companionLevel = Math.max(
-    1,
-    companion?.companionLevel ?? 1,
-  );
-
-  const growthHp = Math.max(
-    0,
-    companion?.growthHp ?? 0,
-  );
-
-  const hpIntoLevel = Math.max(
-    0,
-    companion?.hpIntoLevel ?? 0,
-  );
-
-  const hpRequired = Math.max(
-    1,
-    companion?.hpRequired ?? 100,
-  );
-
-  const hpPercent = clampPercent(
-    (hpIntoLevel / hpRequired) * 100,
-  );
-
   return (
     <LinearGradient colors={['#05000c', '#160628', '#05000c']} style={styles.screen}>
       <StatusBar style="light" />
@@ -74,9 +50,7 @@ export default function CompanionScreen() {
             <View style={styles.heroCard}>
               <Image source={companionImage} resizeMode="contain" style={styles.companionImage} />
               <Text selectable style={styles.name}>{companionName}</Text>
-              <Text selectable style={styles.tier}>
-                Companion Lv {companionLevel}  •  Bond Tier {companion.bondTier}
-              </Text>
+              <Text selectable style={styles.tier}>Bond Tier {companion.bondTier}</Text>
             </View>
 
             <CompanionMeter
@@ -92,14 +66,6 @@ export default function CompanionScreen() {
               label="Energy"
               value={getEnergyPercent(companion.energy, companion.maximumEnergy)}
               detail={`${companion.energy} of ${companion.maximumEnergy} energy`}
-            />
-
-            <CompanionMeter
-              color="#22C55E"
-              icon="fitness"
-              label="Growth HP"
-              value={hpPercent}
-              detail={`${growthHp.toLocaleString()} total HP • ${hpIntoLevel.toLocaleString()} / ${hpRequired.toLocaleString()} HP to Level ${companionLevel + 1}`}
             />
 
             <View style={styles.rulesCard}>
@@ -153,7 +119,7 @@ function CompanionMeter({
   detail,
 }: {
   color: string;
-  icon: 'heart' | 'flash' | 'fitness';
+  icon: 'heart' | 'flash';
   label: string;
   value: number;
   detail: string;

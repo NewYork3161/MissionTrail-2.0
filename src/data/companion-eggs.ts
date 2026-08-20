@@ -2,8 +2,8 @@ import type { ImageSourcePropType } from 'react-native';
 
 // Dedicated egg art has not been added for every catalog entry yet. Static
 // fallbacks keep Metro from failing the entire app bundle on missing files.
-const WATER_EGG_ART = require('../../assets/eggs/water-egg.png');
-const FIRE_EGG_ART = require('../../assets/eggs/fire-egg.png');
+const WATER_EGG_ART = require('../../assets/images/tabIcons/footprints/eggs folder/water/wateregg.png');
+const FIRE_EGG_ART = require('../../assets/images/tabIcons/footprints/eggs folder/fire/Inferno Core Egg.png');
 const UNDISCOVERED_EGG_ART = require('../../assets/images/relicsIcons/undiscovered.png');
 
 export type EggElement =

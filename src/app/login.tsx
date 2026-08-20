@@ -16,8 +16,15 @@ import {
 import { FontAwesome, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
+import * as LocalAuthentication from 'expo-local-authentication';
+import * as SecureStore from 'expo-secure-store';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
+
+const BIOMETRIC_REFRESH_TOKEN_KEY =
+  'missiontrails.biometric-refresh-token';
 
 // =======================
 // LOGIN SCREEN
@@ -49,6 +56,34 @@ export default function LoginScreen() {
   });
 
   // Purpose: Handles sign in.
+  const saveBiometricRefreshToken = async (
+    refreshToken?: string | null
+  ) => {
+    if (!refreshToken) return;
+
+    try {
+      const biometricReady =
+        SecureStore.canUseBiometricAuthentication();
+
+      if (!biometricReady) return;
+
+      await SecureStore.setItemAsync(
+        BIOMETRIC_REFRESH_TOKEN_KEY,
+        refreshToken,
+        {
+          requireAuthentication: true,
+          authenticationPrompt:
+            'Use Face ID to protect Mission Trails sign in',
+        }
+      );
+    } catch (error) {
+      console.warn(
+        'Could not enable biometric sign in:',
+        error
+      );
+    }
+  };
+
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
       Alert.alert('Missing Fields', 'Please enter your email and password.');
@@ -56,7 +91,7 @@ export default function LoginScreen() {
     }
     try {
       setLoading(true);
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password: password,
       });
@@ -66,6 +101,10 @@ export default function LoginScreen() {
         setLoading(false);
         return;
       }
+      await saveBiometricRefreshToken(
+        data.session?.refresh_token
+      );
+
       setLoading(false);
       router.replace('/home-backup'); 
     } catch {
@@ -75,21 +114,269 @@ export default function LoginScreen() {
   };
 
   // Purpose: Handles google sign in.
+  const handleBiometricSignIn = async () => {
+    try {
+      const hasHardware =
+        await LocalAuthentication.hasHardwareAsync();
+
+      if (!hasHardware) {
+        Alert.alert(
+          'Biometrics Unavailable',
+          'This device does not support biometric authentication.'
+        );
+        return;
+      }
+
+      const isEnrolled =
+        await LocalAuthentication.isEnrolledAsync();
+
+      if (!isEnrolled) {
+        Alert.alert(
+          'Biometrics Not Set Up',
+          'Set up Face ID, Touch ID, or fingerprint authentication in your device settings first.'
+        );
+        return;
+      }
+
+      const refreshToken =
+        await SecureStore.getItemAsync(
+          BIOMETRIC_REFRESH_TOKEN_KEY,
+          {
+            requireAuthentication: true,
+            authenticationPrompt:
+              'Sign in to Mission Trails',
+          }
+        );
+
+      if (!refreshToken) {
+        Alert.alert(
+          'Biometrics Not Enabled Yet',
+          'Sign in normally once on this device, then Biometrics Sign In will be available.'
+        );
+        return;
+      }
+
+      const { data, error } =
+        await supabase.auth.refreshSession({
+          refresh_token: refreshToken,
+        });
+
+      if (error) {
+        await SecureStore.deleteItemAsync(
+          BIOMETRIC_REFRESH_TOKEN_KEY
+        );
+
+        throw error;
+      }
+
+      if (!data.session) {
+        throw new Error(
+          'No Mission Trails session was returned.'
+        );
+      }
+
+      // Refresh tokens can rotate, so securely save the latest one.
+      if (
+        data.session.refresh_token &&
+        data.session.refresh_token !== refreshToken
+      ) {
+        await SecureStore.setItemAsync(
+          BIOMETRIC_REFRESH_TOKEN_KEY,
+          data.session.refresh_token,
+          {
+            requireAuthentication: true,
+            authenticationPrompt:
+              'Update Mission Trails biometric sign in',
+          }
+        );
+      }
+
+      router.replace('/home-backup');
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      if (message.toLowerCase().includes('cancel')) {
+        return;
+      }
+
+      Alert.alert(
+        'Biometric Sign In Error',
+        message ||
+          'Biometric authentication could not be completed.'
+      );
+    }
+  };
+
   const handleGoogleSignIn = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: homeRedirectUrl },
-    });
-    if (error) Alert.alert('Google Sign In Error', error.message);
+    try {
+      const redirectTo = Linking.createURL('auth/callback');
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      if (!data.url) {
+        throw new Error('Google did not return a sign-in URL.');
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(
+        data.url,
+        redirectTo
+      );
+
+      if (result.type !== 'success') {
+        return;
+      }
+
+      const callbackUrl = new URL(result.url);
+
+      const queryParams = new URLSearchParams(callbackUrl.search);
+
+      const hashParams = new URLSearchParams(
+        callbackUrl.hash.replace(/^#/, '')
+      );
+
+      const oauthError =
+        queryParams.get('error_description') ??
+        hashParams.get('error_description') ??
+        queryParams.get('error') ??
+        hashParams.get('error');
+
+      if (oauthError) {
+        throw new Error(oauthError);
+      }
+
+      const accessToken =
+        queryParams.get('access_token') ??
+        hashParams.get('access_token');
+
+      const refreshToken =
+        queryParams.get('refresh_token') ??
+        hashParams.get('refresh_token');
+
+      if (!accessToken || !refreshToken) {
+        throw new Error(
+          'Google sign in completed, but Mission Trails did not receive the authentication tokens.'
+        );
+      }
+
+      const { data: sessionData, error: sessionError } =
+        await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+
+      if (sessionError) {
+        throw sessionError;
+      }
+
+      await saveBiometricRefreshToken(
+        sessionData.session?.refresh_token
+      );
+
+      router.replace('/home-backup');
+    } catch (error) {
+      Alert.alert(
+        'Google Sign In Error',
+        error instanceof Error
+          ? error.message
+          : 'Google authentication could not be completed.'
+      );
+    }
   };
 
   // Purpose: Handles apple sign in.
   const handleAppleSignIn = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'apple',
-      options: { redirectTo: homeRedirectUrl },
-    });
-    if (error) Alert.alert('Apple Sign In Error', error.message);
+    try {
+      const available = await AppleAuthentication.isAvailableAsync();
+
+      if (!available) {
+        Alert.alert(
+          'Apple Sign In Unavailable',
+          'Sign in with Apple is not available on this device.'
+        );
+        return;
+      }
+
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (!credential.identityToken) {
+        throw new Error('Apple did not return an identity token.');
+      }
+
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'apple',
+        token: credential.identityToken,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      // Apple normally provides the name only on the first authorization.
+      if (credential.fullName) {
+        const nameParts = [
+          credential.fullName.givenName,
+          credential.fullName.middleName,
+          credential.fullName.familyName,
+        ].filter(Boolean);
+
+        const fullName = nameParts.join(' ');
+
+        if (fullName) {
+          const { error: updateError } = await supabase.auth.updateUser({
+            data: {
+              full_name: fullName,
+              given_name: credential.fullName.givenName,
+              family_name: credential.fullName.familyName,
+            },
+          });
+
+          if (updateError) {
+            console.warn(
+              'Apple name metadata could not be saved:',
+              updateError.message
+            );
+          }
+        }
+      }
+
+      router.replace('/home-backup');
+    } catch (error) {
+      const errorCode =
+        typeof error === 'object' &&
+        error !== null &&
+        'code' in error
+          ? String((error as { code?: unknown }).code)
+          : '';
+
+      if (errorCode === 'ERR_REQUEST_CANCELED') {
+        return;
+      }
+
+      Alert.alert(
+        'Apple Sign In Error',
+        error instanceof Error
+          ? error.message
+          : 'Apple authentication could not be completed.'
+      );
+    }
   };
 
   return (
@@ -138,16 +425,20 @@ export default function LoginScreen() {
           {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.signInText}>SIGN IN</Text>}
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.bioButton}>
+        <TouchableOpacity style={styles.bioButton} onPress={handleBiometricSignIn}>
           <MaterialCommunityIcons name="fingerprint" size={20} color="#63D8FF" />
           <Text style={styles.bioText}>Biometrics Sign In</Text>
         </TouchableOpacity>
 
         <Text style={styles.orText}>OR CONTINUE WITH</Text>
         <View style={styles.socialRow}>
-          <TouchableOpacity style={styles.socialButton} onPress={handleAppleSignIn}>
-            <FontAwesome name="apple" size={24} color="#FFFFFF" /><Text style={styles.socialLabel}>Apple</Text>
-          </TouchableOpacity>
+          <AppleAuthentication.AppleAuthenticationButton
+            buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+            cornerRadius={18}
+            style={styles.appleButton}
+            onPress={handleAppleSignIn}
+          />
           <TouchableOpacity style={styles.socialButton} onPress={handleGoogleSignIn}>
             <FontAwesome name="google" size={20} color="#EA4335" /><Text style={styles.socialLabel}>Google</Text>
           </TouchableOpacity>
@@ -178,6 +469,7 @@ const styles = StyleSheet.create({
   orText: { color: '#767676', textAlign: 'center', fontSize: 11, marginBottom: 18, letterSpacing: 2 },
   socialRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 14, marginBottom: 24 },
   socialButton: { flex: 1, backgroundColor: '#1A1A36', borderRadius: 18, height: 60, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' },
+  appleButton: { flex: 1, height: 60 },
   socialLabel: { color: '#FFFFFF', marginLeft: 10, fontWeight: '600', fontSize: 16 },
   createText: { color: '#AAAAAA', textAlign: 'center', fontSize: 14 },
   createAccent: { color: '#FF4FD8', fontWeight: 'bold' },

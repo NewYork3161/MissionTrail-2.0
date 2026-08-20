@@ -1,8 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { type Href, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MissionBottomTabBar } from '@/components/mission-bottom-tab-bar';
@@ -18,34 +17,9 @@ const companionImage = require('../../assets/images/tabIcons/companion.png');
 // Purpose: Renders the companion screen interface.
 export default function CompanionScreen() {
   const safeArea = useSafeAreaInsets();
-  const router = useRouter();
   const { progress, isLoading, message } = useDailyProgress();
   const companion = progress?.companion;
   const companionName = formatCompanionName(companion?.companionId);
-
-  const companionLevel = Math.max(
-    1,
-    companion?.companionLevel ?? 1,
-  );
-
-  const growthHp = Math.max(
-    0,
-    companion?.growthHp ?? 0,
-  );
-
-  const hpIntoLevel = Math.max(
-    0,
-    companion?.hpIntoLevel ?? 0,
-  );
-
-  const hpRequired = Math.max(
-    1,
-    companion?.hpRequired ?? 100,
-  );
-
-  const hpPercent = clampPercent(
-    (hpIntoLevel / hpRequired) * 100,
-  );
 
   return (
     <LinearGradient colors={['#05000c', '#160628', '#05000c']} style={styles.screen}>
@@ -74,9 +48,7 @@ export default function CompanionScreen() {
             <View style={styles.heroCard}>
               <Image source={companionImage} resizeMode="contain" style={styles.companionImage} />
               <Text selectable style={styles.name}>{companionName}</Text>
-              <Text selectable style={styles.tier}>
-                Companion Lv {companionLevel}  •  Bond Tier {companion.bondTier}
-              </Text>
+              <Text selectable style={styles.tier}>Bond Tier {companion.bondTier}</Text>
             </View>
 
             <CompanionMeter
@@ -94,43 +66,12 @@ export default function CompanionScreen() {
               detail={`${companion.energy} of ${companion.maximumEnergy} energy`}
             />
 
-            <CompanionMeter
-              color="#22C55E"
-              icon="fitness"
-              label="Growth HP"
-              value={hpPercent}
-              detail={`${growthHp.toLocaleString()} total HP • ${hpIntoLevel.toLocaleString()} / ${hpRequired.toLocaleString()} HP to Level ${companionLevel + 1}`}
-            />
-
             <View style={styles.rulesCard}>
               <Text style={styles.rulesTitle}>VERIFIED REWARDS</Text>
               <Text selectable style={styles.rulesText}>
                 Claiming a verified mission adds Bond and restores Energy once. Ordinary phone movement does not drain Energy.
               </Text>
             </View>
-
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Open companion food inventory"
-              onPress={() => router.push('/companion-feed' as Href)}
-              style={({ pressed }) => [
-                styles.feedButton,
-                pressed ? styles.feedButtonPressed : undefined,
-              ]}
-            >
-              <View style={styles.feedIcon}>
-                <Ionicons name="restaurant" size={24} color="#00E5FF" />
-              </View>
-
-              <View style={styles.feedCopy}>
-                <Text style={styles.feedTitle}>COMPANION FOOD</Text>
-                <Text style={styles.feedSubtitle}>
-                  Feed, gain companion HP, and earn explorer XP
-                </Text>
-              </View>
-
-              <Ionicons name="chevron-forward" size={21} color="#A99BB5" />
-            </Pressable>
           </>
         )}
 
@@ -153,7 +94,7 @@ function CompanionMeter({
   detail,
 }: {
   color: string;
-  icon: 'heart' | 'flash' | 'fitness';
+  icon: 'heart' | 'flash';
   label: string;
   value: number;
   detail: string;
@@ -203,45 +144,6 @@ const styles = StyleSheet.create({
   rulesCard: { borderRadius: 16, borderWidth: 1, borderColor: '#28465a', backgroundColor: 'rgba(8,26,39,0.8)', padding: 15, gap: 7 },
   rulesTitle: { color: '#68e7ff', fontSize: 11, fontWeight: '900', letterSpacing: 1 },
   rulesText: { color: '#d2e9ef', fontSize: 12, lineHeight: 18 },
-  feedButton: {
-    minHeight: 78,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#6D28D9',
-    backgroundColor: 'rgba(16, 4, 31, 0.94)',
-    paddingHorizontal: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  feedButtonPressed: {
-    opacity: 0.72,
-  },
-  feedIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(0, 229, 255, 0.35)',
-    backgroundColor: 'rgba(0, 229, 255, 0.08)',
-  },
-  feedCopy: {
-    flex: 1,
-  },
-  feedTitle: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '900',
-    letterSpacing: 0.7,
-  },
-  feedSubtitle: {
-    color: '#A99BB5',
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: 3,
-  },
   errorText: { color: '#ffc46b', fontSize: 12, lineHeight: 17 },
   bottomNavigation: { position: 'absolute', left: 12, right: 12, zIndex: 20 },
 });

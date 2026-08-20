@@ -54,10 +54,6 @@ export type VerifiedDailyProgress = {
     bondPercent: number;
     energy: number;
     maximumEnergy: number;
-    growthHp?: number;
-    companionLevel?: number;
-    hpIntoLevel?: number;
-    hpRequired?: number;
   };
   localDate: string;
   timezone: string;
