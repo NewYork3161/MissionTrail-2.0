@@ -886,9 +886,9 @@ export default function SplashScreen() {
   // Purpose: Handles enter.
   const handleEnter = () => {
 
-    router.replace('/login');
+  router.replace('/onboarding_user_info');
 
-  };
+};
 
   return (
 
