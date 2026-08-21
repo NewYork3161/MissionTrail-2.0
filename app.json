@@ -79,7 +79,8 @@
           "faceIDPermission": "Mission Trails uses Face ID to securely sign you in."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/with-bind-react-native-factory"
     ],
     "experiments": {
       "typedRoutes": true,
