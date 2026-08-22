@@ -55,7 +55,7 @@ export default function LoginScreen() {
     outputRange: [-140, 140],
   });
 
-  // Purpose: Handles sign in.
+  // Purpose: Signs in with email and password, then opens the home screen.
   const saveBiometricRefreshToken = async (
     refreshToken?: string | null
   ) => {
@@ -84,6 +84,7 @@ export default function LoginScreen() {
     }
   };
 
+  // Purpose: Handles sign in.
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
       Alert.alert('Missing Fields', 'Please enter your email and password.');
@@ -113,7 +114,7 @@ export default function LoginScreen() {
     }
   };
 
-  // Purpose: Handles google sign in.
+  // Purpose: Starts Google OAuth and restores the returned Supabase session.
   const handleBiometricSignIn = async () => {
     try {
       const hasHardware =
@@ -210,6 +211,7 @@ export default function LoginScreen() {
     }
   };
 
+  // Purpose: Handles google sign in.
   const handleGoogleSignIn = async () => {
     try {
       const redirectTo = Linking.createURL('auth/callback');

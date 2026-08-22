@@ -34,9 +34,13 @@
     },
     "web": {
       "output": "static",
-      "web": {
-        "favicon": "./assets/images/App_Icon.png"
-      }
+      "favicon": "./assets/images/App_Icon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3cd221da-027d-4381-9679-3fe668626dc4"
+      },
+      "router": {}
     },
     "plugins": [
       "expo-router",
@@ -79,19 +83,12 @@
           "faceIDPermission": "Mission Trails uses Face ID to securely sign you in."
         }
       ],
-      "expo-secure-store",
-      "./plugins/with-bind-react-native-factory"
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
     },
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "b366ec28-52fa-420f-9c80-ac7defb84e3c"
-      }
-    },
-    "owner": "novah2118"
+    "owner": "missiontrails"
   }
 }

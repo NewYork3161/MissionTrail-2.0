@@ -34,6 +34,10 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { router } from 'expo-router';
 
+import {
+  clearOnboardingVerificationTicket,
+} from '@/services/onboarding-verification-ticket-service';
+
 import { supabase } from '../../lib/supabase';
 
 
@@ -41,6 +45,7 @@ import { supabase } from '../../lib/supabase';
 // SCREEN
 // ======================================================
 
+// Purpose: Collects the profile and identity details needed during onboarding.
 export default function OnboardingUserInfo() {
 
   // ====================================================
@@ -87,6 +92,11 @@ export default function OnboardingUserInfo() {
     setOpeningIdVerification,
   ] = useState(false);
 
+  const [
+    enteringKidsMode,
+    setEnteringKidsMode,
+  ] = useState(false);
+
 
   // ====================================================
   // SHOW MESSAGE
@@ -100,6 +110,7 @@ export default function OnboardingUserInfo() {
   //
   // ====================================================
 
+  // Purpose: Shows an onboarding message using the platform alert dialog.
   const showMessage = (
     title: string,
     message: string
@@ -127,6 +138,7 @@ export default function OnboardingUserInfo() {
   // VALIDATE ID INFORMATION
   // ====================================================
 
+  // Purpose: Checks that the required identity fields have been entered.
   const validateIdentityInformation =
     (): boolean => {
 
@@ -171,6 +183,7 @@ export default function OnboardingUserInfo() {
   // GET CURRENT USER
   // ====================================================
 
+  // Purpose: Returns the signed-in Supabase user or reports a signed-out state.
   const getCurrentUser =
     async () => {
 
@@ -202,6 +215,7 @@ export default function OnboardingUserInfo() {
   // SAVE ONBOARDING INFORMATION
   // ====================================================
 
+  // Purpose: Saves the user's current onboarding profile to Supabase.
   const saveOnboardingInformation =
     async () => {
 
@@ -289,6 +303,7 @@ export default function OnboardingUserInfo() {
   //
   // ====================================================
 
+  // Purpose: Validates the form and opens photo ID verification.
   const openCheckId =
     () => {
 
@@ -303,7 +318,8 @@ export default function OnboardingUserInfo() {
 
       if (
         openingIdVerification ||
-        saving
+        saving ||
+        enteringKidsMode
       ) {
 
         console.log(
@@ -402,9 +418,150 @@ export default function OnboardingUserInfo() {
 
 
   // ====================================================
+  // CONTINUE IN KIDS MODE
+  // ====================================================
+
+  // Purpose:
+  // Lets the user explicitly choose reduced-access Kids Mode
+  // from the onboarding information screen.
+  //
+  // Kids Mode skips Photo ID verification and continues
+  // directly toward account creation with:
+  //
+  // - Trails locked
+  // - Meetups locked
+  //
+  // Any previously-issued verified ticket is deleted first.
+  const continueAsKid =
+    async () => {
+
+      if (
+        saving ||
+        openingIdVerification ||
+        enteringKidsMode
+      ) {
+        return;
+      }
+
+
+      // Purpose:
+      // Kids Mode still needs the basic identity information
+      // required by the account creation flow.
+      if (!firstName.trim()) {
+
+        showMessage(
+          'First Name Required',
+          'Please enter your first name before continuing.'
+        );
+
+        return;
+      }
+
+
+      if (!lastName.trim()) {
+
+        showMessage(
+          'Last Name Required',
+          'Please enter your last name before continuing.'
+        );
+
+        return;
+      }
+
+
+      if (!birthday.trim()) {
+
+        showMessage(
+          'Birthday Required',
+          'Please enter your date of birth before continuing.'
+        );
+
+        return;
+      }
+
+
+      try {
+
+        setEnteringKidsMode(
+          true
+        );
+
+
+        // Purpose:
+        // Removes any old verified ticket so Kids Mode can
+        // never inherit verified account permissions.
+        await clearOnboardingVerificationTicket();
+
+
+        console.log(
+          '[ONBOARDING] Kids Mode selected.'
+        );
+
+
+        router.replace({
+          pathname:
+            '/onboarding_success',
+
+          params: {
+
+            firstName:
+              firstName.trim(),
+
+            lastName:
+              lastName.trim(),
+
+            displayName:
+              displayName.trim(),
+
+            birthday:
+              birthday.trim(),
+
+            city:
+              city.trim(),
+
+            state:
+              state.trim(),
+
+            country:
+              country.trim(),
+
+            accountAccessMode:
+              'kids',
+
+            idVerificationStatus:
+              'skipped_kids',
+          },
+        });
+
+
+      } catch (error) {
+
+        console.error(
+          '[ONBOARDING] Unable to enter Kids Mode:',
+          error
+        );
+
+
+        showMessage(
+          'Unable to Continue',
+          'Kids Mode could not be opened. Please try again.'
+        );
+
+
+      } finally {
+
+        setEnteringKidsMode(
+          false
+        );
+      }
+    };
+
+
+  // ====================================================
   // SAVE AND CONTINUE
   // ====================================================
 
+  // Purpose: Saves the profile and continues to the onboarding questionnaire.
   const saveAndContinue =
     async () => {
 
@@ -478,7 +635,8 @@ export default function OnboardingUserInfo() {
 
   const busy =
     saving ||
-    openingIdVerification;
+    openingIdVerification ||
+    enteringKidsMode;
 
 
   // ====================================================
@@ -795,57 +953,66 @@ export default function OnboardingUserInfo() {
 
 
       {/* ==================================================
-          CONTINUE
+          KIDS MODE
       ================================================== */}
 
       <TouchableOpacity
         style={[
-          styles.button,
+          styles.kidsButton,
 
           busy &&
             styles.buttonDisabled,
         ]}
-        onPress={saveAndContinue}
+        onPress={continueAsKid}
         activeOpacity={0.8}
         disabled={busy}
       >
 
-        {saving ? (
+        {enteringKidsMode ? (
 
-          <View
-            style={
-              styles.loadingRow
-            }
-          >
-
-            <ActivityIndicator
-              size="small"
-              color="#FFFFFF"
-            />
-
-            <Text
-              style={
-                styles.loadingButtonText
-              }
-            >
-              SAVING...
-            </Text>
-
-          </View>
+          <ActivityIndicator
+            size="small"
+            color="#63D8FF"
+          />
 
         ) : (
 
-          <Text
-            style={
-              styles.buttonText
-            }
-          >
-            CONTINUE
-          </Text>
+          <Ionicons
+            name="happy-outline"
+            size={27}
+            color="#63D8FF"
+          />
 
         )}
 
+
+        <View
+          style={
+            styles.kidsButtonTextContainer
+          }
+        >
+
+          <Text
+            style={
+              styles.kidsButtonText
+            }
+          >
+            KIDS
+          </Text>
+
+
+          <Text
+            style={
+              styles.kidsButtonSubtitle
+            }
+          >
+            Continue without ID • Trails and Meetups locked
+          </Text>
+
+        </View>
+
       </TouchableOpacity>
+
 
     </ScrollView>
   );
@@ -996,6 +1163,74 @@ const styles =
       fontWeight: '600',
 
       marginLeft: 12,
+    },
+
+
+    // ====================================================
+    // KIDS MODE BUTTON
+    // ====================================================
+
+    kidsButton: {
+
+      width: '100%',
+
+      maxWidth: 550,
+
+      minHeight: 92,
+
+      borderRadius: 20,
+
+      borderWidth: 1.5,
+
+      borderColor:
+        '#63D8FF',
+
+      backgroundColor:
+        '#181028',
+
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      paddingHorizontal: 24,
+
+      paddingVertical: 18,
+
+      marginBottom: 24,
+    },
+
+
+    kidsButtonTextContainer: {
+
+      flex: 1,
+
+      marginLeft: 18,
+    },
+
+
+    kidsButtonText: {
+
+      color: '#FFFFFF',
+
+      fontSize: 22,
+
+      fontWeight: 'bold',
+
+      letterSpacing: 1,
+    },
+
+
+    kidsButtonSubtitle: {
+
+      color: '#B8A7FF',
+
+      fontSize: 15,
+
+      lineHeight: 21,
+
+      marginTop: 4,
     },
 
 

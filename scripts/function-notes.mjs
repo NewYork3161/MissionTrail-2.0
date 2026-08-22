@@ -4,17 +4,18 @@ import process from 'node:process';
 import ts from 'typescript';
 
 const projectRoot = process.cwd();
-const sourceRoots = ['src', 'context', 'lib', 'supabase/functions'];
+const ignoredDirectories = new Set(['.expo', '.git', 'build', 'dist', 'node_modules']);
 const writeNotes = process.argv.includes('--write');
 
-// Purpose: Recursively lists application-owned TypeScript source files.
+// Purpose: Recursively lists every application-owned TSX file, including tracked snapshots.
 function listSourceFiles(directory) {
   if (!fs.existsSync(directory)) return [];
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const absolutePath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return listSourceFiles(absolutePath);
-    if (!/\.tsx?$/.test(entry.name)) return [];
-    if (/\.(test|backup)\.tsx?$/.test(entry.name) || entry.name.endsWith('.d.ts')) return [];
+    if (entry.isDirectory()) {
+      return ignoredDirectories.has(entry.name) ? [] : listSourceFiles(absolutePath);
+    }
+    if (!entry.name.endsWith('.tsx')) return [];
     return [absolutePath];
   });
 }
@@ -169,7 +170,7 @@ function hasPurposeNote(sourceText, lineStart) {
 }
 
 const missing = [];
-for (const filename of sourceRoots.flatMap((root) => listSourceFiles(path.join(projectRoot, root)))) {
+for (const filename of listSourceFiles(projectRoot)) {
   const sourceText = fs.readFileSync(filename, 'utf8');
   const sourceFile = ts.createSourceFile(
     filename,

@@ -24,15 +24,147 @@ import { TrailSearchBar } from '@/components/trails/trail-search-bar';
 import { TrailsEmptyState } from '@/components/trails/trails-empty-state';
 import { TrailsLoadingState } from '@/components/trails/trails-loading-state';
 import { MissionTrailColors as C } from '@/constants/theme';
+import { useAccountAccess } from '@/hooks/use-account-access';
 import { useNearbyTrails } from '@/hooks/use-nearby-trails';
 import { saveSelectedTrail } from '@/services/selected-trail-service';
 import type { Trail } from '@/types/trails';
 
 type ViewMode = 'list' | 'map';
 
-// This screen coordinates trail search, filters, map markers, and navigation.
-// Purpose: Renders the trails screen interface.
+// ======================================================
+// TRAILS ACCESS GATE
+// ======================================================
+
+// Purpose:
+// Checks account permissions before mounting the real
+// Trails screen. Kids and pending accounts never load
+// the protected Trails interface.
 export default function TrailsScreen() {
+
+  const router = useRouter();
+
+  const {
+    access,
+    loading,
+    error,
+  } = useAccountAccess();
+
+
+  if (loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: C.background,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <ActivityIndicator
+          size="large"
+          color={C.cyan}
+        />
+
+        <Text
+          style={{
+            color: C.text,
+            marginTop: 14,
+          }}
+        >
+          Checking trail access...
+        </Text>
+      </View>
+    );
+  }
+
+
+  if (
+    error ||
+    access?.canUseTrails !== true
+  ) {
+    const kidsMode =
+      access?.isKidsMode === true;
+
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: C.background,
+          alignItems: 'center',
+          justifyContent: 'center',
+          paddingHorizontal: 28,
+        }}
+      >
+
+        <Ionicons
+          name="lock-closed-outline"
+          size={58}
+          color={C.cyan}
+        />
+
+        <Text
+          style={{
+            color: C.text,
+            fontSize: 24,
+            fontWeight: '800',
+            textAlign: 'center',
+            marginTop: 18,
+          }}
+        >
+          {kidsMode
+            ? 'Trails Locked in Kids Mode'
+            : 'Trails Locked'}
+        </Text>
+
+        <Text
+          style={{
+            color: C.textMuted,
+            fontSize: 15,
+            lineHeight: 22,
+            textAlign: 'center',
+            marginTop: 12,
+          }}
+        >
+          {kidsMode
+            ? 'Trails and Meetups require ID verification. You can still use the rest of Mission Trails.'
+            : 'ID verification is required before Trails and Meetups can be used.'}
+        </Text>
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={() =>
+            router.replace('/home-backup')
+          }
+          style={{
+            marginTop: 26,
+            paddingHorizontal: 24,
+            paddingVertical: 14,
+            borderRadius: 18,
+            backgroundColor: C.cyan,
+          }}
+        >
+          <Text
+            style={{
+              color: '#050510',
+              fontWeight: '800',
+            }}
+          >
+            BACK TO HOME
+          </Text>
+        </Pressable>
+
+      </View>
+    );
+  }
+
+
+  return <VerifiedTrailsScreen />;
+}
+
+
+// This screen coordinates trail search, filters, map markers, and navigation.
+// Purpose: Renders the verified Trails screen interface.
+function VerifiedTrailsScreen() {
   const router = useRouter();
   const { focus } = useLocalSearchParams<{ focus?: string }>();
   const safeArea = useSafeAreaInsets();

@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAccountAccessState } from '@/services/account-access-service';
 
 import type {
   MeetupPace,
@@ -263,6 +264,31 @@ export async function setTrailFavorite(trailId: string, favorite: boolean) {
   return next;
 }
 
+// ======================================================
+// REQUIRE MEETUP ACCESS
+// ======================================================
+
+// Purpose:
+// Re-checks the current user's persisted account permission
+// immediately before any protected Meetup mutation.
+//
+// This is defense in depth for the current client-side
+// Meetup demo service. When Meetups move to real Supabase
+// mutations, the same rule must also be enforced server-side.
+async function requireMeetupAccess() {
+
+  const access =
+    await getAccountAccessState();
+
+
+  if (!access.canUseMeetups) {
+    throw new Error(
+      'Meetups require ID verification.'
+    );
+  }
+}
+
+
 export type CreateMeetupInput = {
   trailId: string;
   title: string;
@@ -276,6 +302,12 @@ export type CreateMeetupInput = {
 /** Adds a local demo meetup. TODO: replace with authenticated Supabase moderation. */
 // Purpose: Creates trail meetup.
 export async function createTrailMeetup(input: CreateMeetupInput) {
+
+  // Purpose:
+  // Re-checks verified account access immediately before
+  // creating even the current local demo Meetup.
+  await requireMeetupAccess();
+
   const meetup: TrailMeetup = {
     ...input,
     id: `local-${Date.now()}`,
@@ -289,7 +321,15 @@ export async function createTrailMeetup(input: CreateMeetupInput) {
 /** TODO: submit this request through an authenticated, moderated backend. */
 // Purpose: Implements the request to join meetup operation.
 export async function requestToJoinMeetup(_meetupId: string) {
-  return { status: 'requested' as const };
+
+  // Purpose:
+  // Re-checks verified account access immediately before
+  // submitting even the current local demo join request.
+  await requireMeetupAccess();
+
+  return {
+    status: 'requested' as const,
+  };
 }
 
 /** TODO: send reports to a trusted moderation service; never alert the reported user. */

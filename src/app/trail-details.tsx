@@ -25,6 +25,7 @@ import {
 import { CreateMeetupModal } from "@/components/trails/create-meetup-modal";
 import { TrailMeetupCard } from "@/components/trails/trail-meetup-card";
 import { MissionTrailColors as C } from "@/constants/theme";
+import { useAccountAccess } from "@/hooks/use-account-access";
 import { getHikingRoute } from "@/services/hiking-route-service";
 import { loadSelectedTrail } from "@/services/selected-trail-service";
 import { startTrailActivity } from "@/services/trail-activity-service";
@@ -45,9 +46,128 @@ import type {
   TrailSearchCoordinate,
 } from "@/types/trails";
 
-// This screen presents one trail and manages its route, safety, and meetup actions.
-// Purpose: Renders the trail details screen interface.
+// ======================================================
+// TRAIL DETAILS ACCESS GATE
+// ======================================================
+
+// Purpose:
+// Prevents Kids and pending accounts from loading Trail
+// Details directly through navigation or a deep link.
 export default function TrailDetailsScreen() {
+
+  const router = useRouter();
+
+  const {
+    access,
+    loading,
+    error,
+  } = useAccountAccess();
+
+
+  if (loading) {
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: C.background,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <ActivityIndicator
+          size="large"
+          color={C.cyan}
+        />
+      </View>
+    );
+  }
+
+
+  if (
+    error ||
+    access?.canUseTrails !== true
+  ) {
+    const kidsMode =
+      access?.isKidsMode === true;
+
+    return (
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: C.background,
+          alignItems: "center",
+          justifyContent: "center",
+          paddingHorizontal: 28,
+        }}
+      >
+
+        <Ionicons
+          name="lock-closed-outline"
+          size={58}
+          color={C.cyan}
+        />
+
+        <Text
+          style={{
+            color: C.text,
+            fontSize: 24,
+            fontWeight: "800",
+            textAlign: "center",
+            marginTop: 18,
+          }}
+        >
+          {kidsMode
+            ? "Trail Access Locked"
+            : "ID Verification Required"}
+        </Text>
+
+        <Text
+          style={{
+            color: C.textMuted,
+            fontSize: 15,
+            lineHeight: 22,
+            textAlign: "center",
+            marginTop: 12,
+          }}
+        >
+          Trails and Meetups are available only to ID-verified accounts.
+        </Text>
+
+        <Pressable
+          accessibilityRole="button"
+          onPress={() =>
+            router.replace("/home-backup")
+          }
+          style={{
+            marginTop: 26,
+            paddingHorizontal: 24,
+            paddingVertical: 14,
+            borderRadius: 18,
+            backgroundColor: C.cyan,
+          }}
+        >
+          <Text
+            style={{
+              color: "#050510",
+              fontWeight: "800",
+            }}
+          >
+            BACK TO HOME
+          </Text>
+        </Pressable>
+
+      </View>
+    );
+  }
+
+
+  return <VerifiedTrailDetailsScreen />;
+}
+
+
+// This screen presents one trail and manages its route, safety, and meetup actions.
+// Purpose: Renders Trail Details for an ID-verified account.
+function VerifiedTrailDetailsScreen() {
   const { trailId, section } = useLocalSearchParams<{
     trailId?: string;
     section?: string;

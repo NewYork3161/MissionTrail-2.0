@@ -22,6 +22,7 @@ import {
 } from "react-native";
 
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAccountAccess } from "@/hooks/use-account-access";
 
 import { useDailyProgress } from "@/hooks/use-daily-progress";
 import { useDailyActivity } from "@/providers/activity-progress-provider";
@@ -274,6 +275,49 @@ const EMPTY_PROFILE: RealProfile = {
 export default function ProfileScreen() {
   const safeArea = useSafeAreaInsets();
   const router = useRouter();
+
+  // Purpose:
+  // Loads the signed-in account permission used by
+  // Profile's custom bottom navigation.
+  const {
+    access,
+    loading: accessLoading,
+  } = useAccountAccess();
+
+  const canUseTrails =
+    access?.canUseTrails === true;
+
+
+  // Purpose:
+  // Opens Profile navigation tabs while keeping Trails
+  // unavailable to Kids and other non-verified accounts.
+  const openBottomTab = (
+    tab: (typeof bottomTabs)[number],
+  ) => {
+
+    if (tab.key === "trails") {
+
+      if (accessLoading) {
+        Alert.alert(
+          "Checking Access",
+          "Mission Trails is checking your trail access.",
+        );
+
+        return;
+      }
+
+      if (!canUseTrails) {
+        Alert.alert(
+          "Trails Locked",
+          "Trails and Meetups require ID verification. Kids Mode can continue using the rest of Mission Trails.",
+        );
+
+        return;
+      }
+    }
+
+    router.push(tab.route);
+  };
   const [menuVisible, setMenuVisible] = useState(false);
 
   const {
@@ -987,7 +1031,7 @@ export default function ProfileScreen() {
                 ]}
                 onPress={() => {
                   if (!isActiveTab) {
-                    router.push(tab.route);
+                    openBottomTab(tab);
                   }
                 }}
               >

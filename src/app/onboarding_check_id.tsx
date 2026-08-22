@@ -56,11 +56,17 @@ import {
   IdVerificationResult,
 } from '../services/onboarding_ai_check_id_authentication';
 
+import {
+  saveOnboardingVerificationTicket,
+} from '@/services/onboarding-verification-ticket-service';
+
+
 
 // ======================================================
 // SCREEN
 // ======================================================
 
+// Purpose: Guides the user through selecting and verifying a photo ID.
 export default function OnboardingCheckId() {
 
   // ====================================================
@@ -147,6 +153,7 @@ export default function OnboardingCheckId() {
   // CLEAR PREVIOUS VERIFICATION
   // ====================================================
 
+  // Purpose: Clears an old verification result before the ID image changes.
   const clearVerificationResult = () => {
     setVerificationResult(null);
   };
@@ -156,6 +163,7 @@ export default function OnboardingCheckId() {
   // SHOW MESSAGE
   // ====================================================
 
+  // Purpose: Shows an onboarding message using the platform alert dialog.
   const showMessage = (
     title: string,
     message: string
@@ -185,6 +193,7 @@ export default function OnboardingCheckId() {
   //
   // ====================================================
 
+  // Purpose: Lets the user choose an ID image from the device library.
   const selectIdImage = async () => {
 
     if (verifying) {
@@ -265,6 +274,7 @@ export default function OnboardingCheckId() {
   //
   // ====================================================
 
+  // Purpose: Opens the camera so the user can photograph an ID.
   const takeIdPhoto = async () => {
 
     if (verifying) {
@@ -344,6 +354,7 @@ export default function OnboardingCheckId() {
   // REMOVE SELECTED ID
   // ====================================================
 
+  // Purpose: Removes the selected ID image and resets its verification state.
   const removeIdImage = () => {
 
     if (verifying) {
@@ -361,6 +372,7 @@ export default function OnboardingCheckId() {
   // CHECK REQUIRED ONBOARDING INFORMATION
   // ====================================================
 
+  // Purpose: Checks that the required identity details are ready for verification.
   const validateOnboardingInformation =
     (): boolean => {
 
@@ -405,6 +417,7 @@ export default function OnboardingCheckId() {
   // VERIFY ID
   // ====================================================
 
+  // Purpose: Submits the ID image and onboarding details for identity verification.
   const verifyId = async () => {
 
     // --------------------------------------------------
@@ -525,6 +538,25 @@ export default function OnboardingCheckId() {
         )
       ) {
 
+        // Purpose:
+        // Saves the one-time ticket issued by the trusted
+        // verification server before leaving this screen.
+        //
+        // The ticket is deliberately kept out of
+        // Expo Router parameters.
+        if (!result.verificationTicket) {
+
+          throw new Error(
+            'Secure verification ticket was not returned. Please verify your ID again.'
+          );
+        }
+
+
+        await saveOnboardingVerificationTicket(
+          result.verificationTicket
+        );
+
+
         console.log(
           '[CHECK ID] ID information matched. Opening onboarding_success...'
         );
@@ -539,6 +571,12 @@ export default function OnboardingCheckId() {
             city,
             state,
             country,
+
+            accountAccessMode:
+              'verified',
+
+            idVerificationStatus:
+              'verified',
           },
         });
 

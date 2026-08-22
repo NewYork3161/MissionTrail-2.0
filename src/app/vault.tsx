@@ -1,15 +1,28 @@
-import { RelicDetailModal } from "@/components/relic-detail-modal";
+import {
+  RelicDetailModal,
+} from "@/components/relic-detail-modal";
 import {
   RELICS,
   type Relic,
   type RelicRarity,
   UNDISCOVERED_RELIC_ICON,
 } from "@/constants/relics";
-import { syncServerVaultCache } from "@/services/vault";
-import { getPlayerProgress } from "@/utils/player-progress";
-import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
 import {
+  syncServerVaultCache,
+} from "@/services/vault";
+import {
+  getPlayerProgress,
+} from "@/utils/player-progress";
+import {
+  useFocusEffect,
+  useRouter,
+} from "expo-router";
+import {
+  useCallback,
+  useState,
+} from "react";
+import {
+  Alert,
   Dimensions,
   Image,
   Pressable,
@@ -18,7 +31,12 @@ import {
   Text,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
+import {
+  useAccountAccess,
+} from "@/hooks/use-account-access";
 
 const screen = Dimensions.get("window");
 const isSmallPhone = screen.height < 740 || screen.width < 380;
@@ -61,6 +79,49 @@ const bottomTabs = [
 export default function VaultScreen() {
   const router = useRouter();
   const safeArea = useSafeAreaInsets();
+
+  // Purpose:
+  // Loads account permission so the Vault navigation bar
+  // can explain why Trails are unavailable.
+  const {
+    access,
+    loading: accessLoading,
+  } = useAccountAccess();
+
+  const canUseTrails =
+    access?.canUseTrails === true;
+
+
+  // Purpose:
+  // Navigates from Vault while protecting the Trails route
+  // for Kids Mode and other non-verified accounts.
+  const openBottomTab = (
+    tab: (typeof bottomTabs)[number],
+  ) => {
+
+    if (tab.key === "trails") {
+
+      if (accessLoading) {
+        Alert.alert(
+          "Checking Access",
+          "Mission Trails is checking your trail access.",
+        );
+
+        return;
+      }
+
+      if (!canUseTrails) {
+        Alert.alert(
+          "Trails Locked",
+          "Trails and Meetups require ID verification. Kids Mode can continue using the rest of Mission Trails.",
+        );
+
+        return;
+      }
+    }
+
+    router.push(tab.route);
+  };
   const [collectedRelicIds, setCollectedRelicIds] = useState<string[]>([]);
   const [collectedAtByRelicId, setCollectedAtByRelicId] = useState<
     Record<string, string>
@@ -230,7 +291,7 @@ export default function VaultScreen() {
                   styles.tabButton,
                   pressed && styles.pressed,
                 ]}
-                onPress={() => router.push(tab.route)}
+                onPress={() => openBottomTab(tab)}
               >
                 <View
                   style={[

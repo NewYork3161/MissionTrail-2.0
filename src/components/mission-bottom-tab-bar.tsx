@@ -1,5 +1,6 @@
 import { useRouter } from 'expo-router';
-import { Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { useAccountAccess } from '@/hooks/use-account-access';
+import { Alert, Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 export type MissionTabKey =
   | 'home'
@@ -33,6 +34,49 @@ const TABS = [
 export function MissionBottomTabBar({ activeTab }: { activeTab: MissionTabKey }) {
   const router = useRouter();
   const window = useWindowDimensions();
+
+  // Purpose:
+  // Loads the user's account permission so the shared
+  // navigation bar can lock Trails before navigation.
+  const {
+    access,
+    loading: accessLoading,
+  } = useAccountAccess();
+
+  const canUseTrails =
+    access?.canUseTrails === true;
+
+
+  // Purpose:
+  // Opens normal navigation tabs while blocking Trails
+  // for Kids Mode, pending, signed-out, or unresolved access.
+  const openTab = (
+    tab: (typeof TABS)[number],
+  ) => {
+
+    if (tab.key === 'trails') {
+
+      if (accessLoading) {
+        Alert.alert(
+          'Checking Access',
+          'Mission Trails is checking whether Trails are available for this account.',
+        );
+
+        return;
+      }
+
+      if (!canUseTrails) {
+        Alert.alert(
+          'Trails Locked',
+          'Trails and Meetups require ID verification. Kids Mode can continue using the rest of Mission Trails.',
+        );
+
+        return;
+      }
+    }
+
+    router.push(tab.route);
+  };
   const isSmallPhone = window.height < 740 || window.width < 380;
   const tabBarHeight = isSmallPhone ? 72 : 82;
   const iconWrapSize = isSmallPhone ? 38 : 44;
@@ -49,7 +93,7 @@ export function MissionBottomTabBar({ activeTab }: { activeTab: MissionTabKey })
             accessibilityLabel={`${tab.label.replace('...', 'ion')} tab`}
             accessibilityState={{ selected: isActive }}
             hitSlop={4}
-            onPress={() => router.push(tab.route)}
+            onPress={() => openTab(tab)}
             style={({ pressed }) => [
               styles.tabButton,
               { height: tabBarHeight - 6 },

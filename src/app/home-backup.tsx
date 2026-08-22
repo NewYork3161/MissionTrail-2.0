@@ -25,6 +25,7 @@ import React, {
 } from "react";
 
 import {
+  Alert,
   Dimensions,
   Image,
   Modal,
@@ -53,6 +54,7 @@ import { RelicAwakening } from "@/components/relic-awakening";
 import { SecureRelicCard } from "@/components/secure-relic-card";
 import { RELICS, type Relic } from "@/constants/relics";
 import { useDailyProgress } from "@/hooks/use-daily-progress";
+import { useAccountAccess } from "@/hooks/use-account-access";
 import { useSecureRelicField } from "@/hooks/use-secure-relic-field";
 import { useDailyActivity } from "@/providers/activity-progress-provider";
 import { getDevelopmentMeetupsToday } from "@/services/development-meetup-data";
@@ -269,6 +271,11 @@ const mapButtons = [
 
 const speedLimitMetersPerSecond = 20 * 0.44704;
 
+// Ignore weak/stale fixes before they can move the player or enter
+// secure GPS history. Outdoor iPhone GPS is usually much better than this.
+const MAX_ACCEPTED_GPS_ACCURACY_METERS = 25;
+const MAX_ACCEPTED_GPS_AGE_MS = 12_000;
+
 const RELIC_COLLECTION_RADIUS_FEET = 10;
 
 // Both checks must pass. __DEV__ is false in production bundles, so this UI is removed there.
@@ -401,6 +408,19 @@ const darkMapStyle = [
 export default function HomeScreen() {
   const router = useRouter();
   const { session } = useAuth();
+
+  // Purpose:
+  // Loads this user's Mission Trails permissions so Home
+  // can hide Meetups and lock the Trails tab when needed.
+  const {
+    access: accountAccess,
+  } = useAccountAccess();
+
+  const canUseTrails =
+    accountAccess?.canUseTrails === true;
+
+  const canUseMeetups =
+    accountAccess?.canUseMeetups === true;
   const dailyActivity = useDailyActivity();
   const { progress: sharedProgress, refresh: refreshSharedProgress } =
     useDailyProgress();
@@ -514,8 +534,13 @@ export default function HomeScreen() {
 
   const mapCoordinates = visualGpsPoints.map(makeMapCoordinate);
 
-  const playerCoordinate = latestGpsPoint
-    ? makeMapCoordinate(latestGpsPoint)
+  const stablePlayerLocation =
+    getStableFootprintLocation(visualGpsPoints) ?? latestGpsPoint;
+
+  // UI/map calculations use the stabilized walking position.
+  // Secure relic verification still receives the original accepted GPS samples.
+  const playerCoordinate = stablePlayerLocation
+    ? makeMapCoordinate(stablePlayerLocation)
     : null;
 
   // Test meetups exist only in development and never write to real user accounts.
@@ -543,16 +568,25 @@ export default function HomeScreen() {
       ),
     [developmentMeetups, joinedMeetupIds, meetupViewerId],
   );
+  // Purpose:
+  // Hides all meetup markers unless the user's account
+  // has ID-verified Meetup access.
   const visibleMapMeetups = useMemo(
-    () =>
-      filterMeetupsForMap(mapMeetups, {
+    () => {
+      if (!canUseMeetups) {
+        return [];
+      }
+
+      return filterMeetupsForMap(mapMeetups, {
         currentUserId: meetupViewerId,
         friendUserIds: meetupFriendIds,
         maxMarkers: 40,
         radiusMiles: meetupRadiusMiles,
         userLocation: playerCoordinate,
-      }),
+      });
+    },
     [
+      canUseMeetups,
       mapMeetups,
       meetupFriendIds,
       meetupRadiusMiles,
@@ -793,6 +827,7 @@ export default function HomeScreen() {
   const saveGoodGpsPoint = useCallback(
     (point: Location.LocationObject) => {
       if (!session?.user.id) return;
+      if (!isUsableGpsLocation(point)) return;
       if (acceptedGpsUserIdRef.current !== session.user.id) {
         acceptedGpsUserIdRef.current = session.user.id;
         acceptedGpsSampleIdsRef.current.clear();
@@ -884,6 +919,13 @@ export default function HomeScreen() {
       try {
         const watcher = await watchLiveLocation((newLocation) => {
           if (!isMounted) {
+            return;
+          }
+
+          if (!isUsableGpsLocation(newLocation)) {
+            setLocationError(
+              "Improving GPS accuracy… Keep your phone in an open area.",
+            );
             return;
           }
 
@@ -1059,20 +1101,47 @@ export default function HomeScreen() {
   // Development joins are local previews only; production will require a server mutation.
   // Purpose: Implements the join meetup operation.
   const joinMeetup = useCallback((meetup: Meetup) => {
+
+    // Purpose:
+    // Prevents Meetup joins from running unless this
+    // account currently has verified Meetup access.
+    if (!canUseMeetups) {
+      Alert.alert(
+        "Meetups Locked",
+        "Meetups require ID verification.",
+      );
+
+      return;
+    }
+
     if (!__DEV__) return;
     setJoiningMeetupId(meetup.id);
     setJoinedMeetupIds((current) =>
       current.includes(meetup.id) ? current : [...current, meetup.id],
     );
     setJoiningMeetupId(null);
-  }, []);
+  }, [canUseMeetups]);
 
   // Stage 4 uses the accessible meetup list as the fuller detail alternative.
   // Purpose: Implements the view meetup details operation.
   const viewMeetupDetails = useCallback((meetup: Meetup) => {
+
+    // Purpose:
+    // Stops Kids and pending accounts from opening
+    // Meetup details even if this function is invoked directly.
+    if (!canUseMeetups) {
+      Alert.alert(
+        "Meetups Locked",
+        "Meetups require ID verification.",
+      );
+
+      return;
+    }
+
     setSelectedMeetupId(meetup.id);
     setIsMeetupListOpen(true);
-  }, []);
+
+  }, [canUseMeetups]);
 
   // =====================
   // SCREEN
@@ -1090,15 +1159,17 @@ export default function HomeScreen() {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
-        customMapStyle={darkMapStyle}
-        mapType={Platform.OS === "ios" ? "mutedStandard" : "standard"}
+        customMapStyle={Platform.OS === "android" ? darkMapStyle : undefined}
+        mapType="standard"
         initialRegion={mapRegion ?? undefined}
-        userInterfaceStyle="dark"
         showsUserLocation={false}
         showsMyLocationButton={false}
         showsCompass={false}
-        showsScale={false}
-        showsPointsOfInterest={false}
+        showsScale
+        showsPointsOfInterest
+        showsBuildings
+        showsIndoors
+        showsTraffic={false}
         rotateEnabled
         pitchEnabled
         onRegionChangeComplete={setMapRegion}
@@ -1306,7 +1377,7 @@ export default function HomeScreen() {
             },
           ]}
         >
-          {renderBottomTabBar(router)}
+          {renderBottomTabBar(router, canUseTrails)}
         </View>
       </View>
 
@@ -1317,8 +1388,8 @@ export default function HomeScreen() {
       />
 
       <MeetupListModal
-        visible={isMeetupListOpen}
-        meetups={mapMeetups}
+        visible={canUseMeetups && isMeetupListOpen}
+        meetups={canUseMeetups ? mapMeetups : []}
         radiusMiles={meetupRadiusMiles}
         userLocation={playerCoordinate}
         currentUserId={meetupViewerId}
@@ -1367,7 +1438,7 @@ async function getFirstLocation() {
     // Only use a cached position when it is recent and reasonably precise.
     // Otherwise wait for a fresh High Accuracy reading.
     maxAge: 15_000,
-    requiredAccuracy: 35,
+    requiredAccuracy: MAX_ACCEPTED_GPS_ACCURACY_METERS,
   });
 
   if (lastKnownLocation) {
@@ -1404,6 +1475,37 @@ function watchLiveLocation(
 }
 
 // =======================
+// GPS QUALITY
+// =======================
+
+// Purpose: Rejects stale, invalid, or excessively inaccurate GPS fixes.
+function isUsableGpsLocation(location: Location.LocationObject) {
+  const { latitude, longitude, accuracy } = location.coords;
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return false;
+  }
+
+  if (
+    Number.isFinite(location.timestamp) &&
+    Date.now() - location.timestamp > MAX_ACCEPTED_GPS_AGE_MS
+  ) {
+    return false;
+  }
+
+  if (
+    accuracy !== null &&
+    accuracy !== undefined &&
+    (!Number.isFinite(accuracy) ||
+      accuracy > MAX_ACCEPTED_GPS_ACCURACY_METERS)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+// =======================
 // SPEED LIMIT
 // =======================
 
@@ -1423,6 +1525,7 @@ function isOverSpeedLimit(location: Location.LocationObject) {
 
 // This does NOT alter the GPS data used for relic verification.
 // It only cleans the trail that the player sees on the map.
+// Purpose: Smooths accepted GPS points into the walking trail shown on the map.
 function buildVisualGpsTrack(
   points: Location.LocationObject[],
 ): Location.LocationObject[] {
@@ -1492,6 +1595,7 @@ function buildVisualGpsTrack(
 // SPEED IN MPH
 // =====================
 
+// Purpose: Converts the location's meters-per-second speed into miles per hour.
 function getSpeedMph(location?: Location.LocationObject) {
   if (!location?.coords.speed || location.coords.speed < 0) {
     return 0;
@@ -1540,9 +1644,9 @@ function makeMapRegion(location: Location.LocationObject): Region {
 
     longitude: location.coords.longitude,
 
-    latitudeDelta: 0.012,
+    latitudeDelta: 0.006,
 
-    longitudeDelta: 0.012,
+    longitudeDelta: 0.006,
   };
 }
 
@@ -1673,6 +1777,7 @@ function getFootprintDistanceMeters(
   left: Location.LocationObject,
   right: Location.LocationObject,
 ) {
+  // Purpose: Converts degrees to radians for the distance calculation.
   const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
 
   const latitude1 = toRadians(left.coords.latitude);
@@ -2969,7 +3074,33 @@ function MeetupListModal({
 // =======================
 
 // Purpose: Renders bottom tab bar.
-function renderBottomTabBar(router: ReturnType<typeof useRouter>) {
+function renderBottomTabBar(
+  router: ReturnType<typeof useRouter>,
+  canUseTrails: boolean,
+) {
+
+  // Purpose:
+  // Opens normal tabs while preventing Kids or pending
+  // accounts from entering the protected Trails route.
+  const openTab = (
+    tab: (typeof bottomTabs)[number],
+  ) => {
+
+    if (
+      tab.key === "trails" &&
+      !canUseTrails
+    ) {
+      Alert.alert(
+        "Trails Locked",
+        "Trails and Meetups require ID verification. Kids Mode can continue using the rest of Mission Trails.",
+      );
+
+      return;
+    }
+
+    router.push(tab.route);
+  };
+
   return (
     <View style={styles.tabBar}>
       {bottomTabs.map((tab) => {
@@ -2983,7 +3114,7 @@ function renderBottomTabBar(router: ReturnType<typeof useRouter>) {
 
               pressed && styles.pressed,
             ]}
-            onPress={() => router.push(tab.route)}
+            onPress={() => openTab(tab)}
           >
             <View
               style={[

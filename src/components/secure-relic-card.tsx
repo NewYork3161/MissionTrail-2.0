@@ -16,6 +16,7 @@ import type { ReturnTypeOfSecureRelicField } from "@/types/secure-relic-hook";
 const HAPTICS_KEY = "mission-trail:relic-haptics:v1";
 const SOUNDS_KEY = "mission-trail:relic-sounds:v1";
 
+// Purpose: Shows secure relic proximity, direction, and collection controls.
 export function SecureRelicCard({
   field,
   navigationDirection = null,
@@ -35,6 +36,7 @@ export function SecureRelicCard({
 
   const showDetails = expanded ?? internalShowDetails;
 
+  // Purpose: Expands or collapses the relic's additional details.
   function toggleDetails() {
     const next = !showDetails;
 
@@ -102,11 +104,13 @@ export function SecureRelicCard({
     }
   }, [field.status, hapticsEnabled, soundsEnabled]);
 
+  // Purpose: Updates and saves the player's relic haptics preference.
   function setHaptics(value: boolean) {
     setHapticsEnabled(value);
     void AsyncStorage.setItem(HAPTICS_KEY, String(value));
   }
 
+  // Purpose: Updates and saves the player's relic sound preference.
   function setSounds(value: boolean) {
     setSoundsEnabled(value);
     void AsyncStorage.setItem(SOUNDS_KEY, String(value));
@@ -437,18 +441,21 @@ export function SecureRelicCard({
   );
 }
 
+// Purpose: Converts a bearing into a short compass direction such as NE.
 function getDirection(bearing: number) {
   const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
   return directions[Math.round(bearing / 45) % 8];
 }
 
+// Purpose: Converts a bearing into the matching directional arrow.
 function getDirectionArrow(bearing: number) {
   const arrows = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"];
 
   return arrows[Math.round(bearing / 45) % 8];
 }
 
+// Purpose: Describes the relic signal strength shown to the player.
 function getSignalStatus(clueStrength: number, revealed: boolean) {
   if (revealed) {
     return "RELIC SIGNAL LOCKED";
