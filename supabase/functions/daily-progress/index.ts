@@ -127,10 +127,21 @@ async function loadDailyProgress(
   const progress = await admin.rpc('server_get_verified_daily_progress', { p_user_id: userId });
   if (progress.error || !progress.data) throw new Error('MISSION_PROGRESS_FAILED');
 
-  const [totalXp, verifiedSteps, companion, streak, missionRewards] = await Promise.all([
+  const [
+    totalXp,
+    verifiedSteps,
+    companion,
+    care,
+    streak,
+    missionRewards,
+  ] = await Promise.all([
     admin.rpc('server_get_total_xp', { p_user_id: userId }),
     admin.rpc('server_get_device_steps', { p_user_id: userId }),
     admin.rpc('server_get_companion_progress', { p_user_id: userId }),
+
+    // Purpose: Loads the Tamagotchi-style care stats.
+    admin.rpc('server_get_companion_care', { p_user_id: userId }),
+
     admin.rpc('server_get_daily_streak', { p_user_id: userId }),
     admin.rpc('server_get_mission_rewards', { p_user_id: userId }),
   ]);
@@ -138,6 +149,7 @@ async function loadDailyProgress(
   if (totalXp.error) console.warn(`[daily-progress:${requestId}] total XP unavailable`);
   if (verifiedSteps.error) console.warn(`[daily-progress:${requestId}] device steps unavailable`);
   if (companion.error) console.warn(`[daily-progress:${requestId}] companion progress unavailable`);
+  if (care.error) console.warn(`[daily-progress:${requestId}] companion care unavailable`);
   if (streak.error) console.warn(`[daily-progress:${requestId}] daily streak unavailable`);
   if (missionRewards.error) console.warn(`[daily-progress:${requestId}] mission rewards unavailable`);
 
@@ -161,13 +173,23 @@ async function loadDailyProgress(
     verifiedSteps: Number(verifiedSteps.data ?? 0),
     dailyStreak: Number(streak.data ?? 0),
     missions,
-    companion: companion.data ?? {
-      companionId: null,
-      bondPoints: 0,
-      bondTier: 1,
-      bondPercent: 0,
-      energy: 0,
-      maximumEnergy: 100,
+    companion: {
+      ...(companion.data ?? {
+        companionId: null,
+        bondPoints: 0,
+        bondTier: 1,
+        bondPercent: 0,
+        energy: 0,
+        maximumEnergy: 100,
+      }),
+
+      // Tamagotchi-style care values.
+      hunger: Number(care.data?.hunger ?? 0),
+      happiness: Number(care.data?.happiness ?? 0),
+      health: Number(care.data?.health ?? 0),
+      careStreak: Number(care.data?.careStreak ?? 0),
+      lastFedAt: care.data?.lastFedAt ?? null,
+      lastHealthyDate: care.data?.lastHealthyDate ?? null,
     },
   };
 }

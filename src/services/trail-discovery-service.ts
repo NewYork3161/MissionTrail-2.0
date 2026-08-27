@@ -8,7 +8,7 @@ import {
 import { supabase } from '../../lib/supabase';
 import type { NearbyTrail, TrailSearchCoordinate } from '@/types/trails';
 
-const CACHE_PREFIX = 'mission-trail:nearby-trails:v2:';
+const CACHE_PREFIX = 'mission-trail:nearby-trails:v4:';
 const CACHE_TTL_MS = 30 * 60 * 1_000;
 const DEFAULT_RADIUS_METERS = 25 * 1_609.344;
 
@@ -188,5 +188,78 @@ export async function searchNearbyTrails(
   await AsyncStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), trails } satisfies CachedSearch));
   return trails;
 }
+
+// Purpose:
+// Converts a city or ZIP/postal code into a trusted
+// coordinate using the Trail Discovery Edge Function.
+export async function geocodeTrailLocation(
+  query: string,
+): Promise<TrailSearchCoordinate | null> {
+
+  const searchText =
+    query.trim();
+
+
+  if (!searchText) {
+    return null;
+  }
+
+
+  const {
+    data,
+    error,
+  } =
+    await supabase.functions.invoke<{
+      location?: {
+        latitude?: number;
+        longitude?: number;
+        formatted?: string;
+      } | null;
+    }>(
+      'trail-discovery',
+      {
+        body: {
+          action: 'geocode',
+          query: searchText,
+        },
+      }
+    );
+
+
+  if (error) {
+
+    const normalizedError =
+      await normalizeFunctionError(
+        error
+      );
+
+    throw normalizedError;
+  }
+
+
+  const latitude =
+    data?.location?.latitude;
+
+  const longitude =
+    data?.location?.longitude;
+
+
+  if (
+    typeof latitude !== 'number' ||
+    !Number.isFinite(latitude) ||
+    typeof longitude !== 'number' ||
+    !Number.isFinite(longitude)
+  ) {
+    return null;
+  }
+
+
+  return {
+    latitude,
+    longitude,
+  };
+}
+
+
 
 export const TRAIL_SEARCH_RADIUS_METERS = DEFAULT_RADIUS_METERS;

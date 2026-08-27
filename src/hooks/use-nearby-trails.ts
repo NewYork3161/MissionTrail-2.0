@@ -9,7 +9,10 @@ import {
   getTrails,
   setTrailFavorite,
 } from '@/services/trail-data-service';
-import { TrailDiscoveryError } from '@/services/trail-discovery-service';
+import {
+  geocodeTrailLocation,
+  TrailDiscoveryError,
+} from '@/services/trail-discovery-service';
 import type { Trail, TrailFilters, TrailSearchCoordinate } from '@/types/trails';
 import { calculateDistanceMeters } from '@/utils/distance';
 import { EMPTY_TRAIL_FILTERS, filterTrails } from '@/utils/trail-filters';
@@ -82,7 +85,10 @@ export function useNearbyTrails() {
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [favoriteBusyIds, setFavoriteBusyIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<TrailFilters>(EMPTY_TRAIL_FILTERS);
-  const [query, setQuery] = useState('');
+  const [query, setQueryValue] = useState('');
+  const [filterQuery, setFilterQuery] = useState('');
+  const [isSearchingQuery, setIsSearchingQuery] = useState(false);
+  const [isLocationSearchActive, setIsLocationSearchActive] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [locationStatus, setLocationStatus] = useState<TrailLocationStatus>('not_requested');
@@ -94,6 +100,12 @@ export function useNearbyTrails() {
   const locationSubscriptionStartingRef = useRef(false);
   const catalogRequestIdRef = useRef(0);
   const searchCenterRef = useRef<TrailSearchCoordinate | null>(null);
+
+  // Purpose:
+  // Prevents phone GPS updates from immediately replacing
+  // a city or ZIP search chosen by the user.
+  const locationSearchActiveRef =
+    useRef(false);
   const favoriteMutationIdsRef = useRef(new Set<string>());
 
   // Loads trail cards for one coordinate and ignores responses from stale searches.
@@ -157,6 +169,45 @@ export function useNearbyTrails() {
     }
   }, []);
 
+  // Purpose:
+  // Reloads only Meetup records from Supabase without
+  // re-running GPS or trail discovery.
+  //
+  // This lets Meetups Today update immediately after the
+  // user creates a Meetup and returns from Trail Details.
+  const refreshMeetups =
+    useCallback(
+      async () => {
+
+        try {
+
+          const trailMeetups =
+            await getTrailMeetups();
+
+
+          if (
+            mountedRef.current
+          ) {
+
+            setMeetups(
+              trailMeetups
+            );
+          }
+
+        } catch (
+          meetupError
+        ) {
+
+          logLocationProblem(
+            'Meetup refresh failed.',
+            meetupError
+          );
+        }
+      },
+      []
+    );
+
+
   // Gives simulators a clear no-location state without inventing GPS coordinates.
   // Purpose: Implements the activate simulator preview operation.
   const activateSimulatorPreview = useCallback(async (): Promise<TrailLocationResult> => {
@@ -193,6 +244,15 @@ export function useNearbyTrails() {
           setLocationWarning(null);
           logTrailDebug('Foreground device coordinate updated.', coordinate);
 
+          // Purpose:
+          // Keep updating the real blue-dot location, but do not
+          // replace a catalog the user intentionally searched for.
+          if (
+            locationSearchActiveRef.current
+          ) {
+            return;
+          }
+
           if (
             !searchCenterRef.current
             || calculateDistanceMeters(coordinate, searchCenterRef.current)
@@ -221,6 +281,25 @@ export function useNearbyTrails() {
   // Purpose: Implements the run location request operation.
   const runLocationRequest = useCallback(async (forceRefresh = false): Promise<TrailLocationResult> => {
     const isIosSimulator = Platform.OS === 'ios' && !Device.isDevice;
+
+    // Purpose:
+    // Choosing the real-location action exits city / ZIP browsing.
+    locationSearchActiveRef.current =
+      false;
+
+    if (mountedRef.current) {
+      setIsLocationSearchActive(
+        false
+      );
+
+      setQueryValue(
+        ''
+      );
+
+      setFilterQuery(
+        ''
+      );
+    }
     if (mountedRef.current) {
       setIsRefreshing(true);
       setLocationStatus('checking');
@@ -350,9 +429,271 @@ export function useNearbyTrails() {
     };
   }, [refresh]);
 
+  // Purpose:
+  // Updates the visible search text and immediately filters
+  // the currently loaded catalog by name, city, or address.
+  const setQuery = useCallback(
+    (value: string) => {
+
+      setQueryValue(
+        value
+      );
+
+
+      // A partial ZIP should stay visible while the user types
+      // instead of temporarily deleting the whole trail list.
+      if (
+        /^\d{1,5}$/.test(
+          value.trim()
+        )
+      ) {
+
+        setFilterQuery(
+          ''
+        );
+
+        return;
+      }
+
+
+      setFilterQuery(
+        value
+      );
+    },
+    []
+  );
+
+
+  // Purpose:
+  // Searches locally by trail name first, then geocodes
+  // city names and ZIP codes and loads trails around them.
+  const searchQuery = useCallback(
+    async () => {
+
+      const searchText =
+        query.trim();
+
+
+      if (!searchText) {
+
+        setFilterQuery(
+          ''
+        );
+
+        return;
+      }
+
+
+      const isZipCode =
+        /^\d{5}(?:-\d{4})?$/.test(
+          searchText
+        );
+
+
+      // Purpose:
+      // Trail and park names already in the loaded catalog
+      // should filter immediately without changing location.
+      const localMatches =
+        filterTrails(
+          allTrails,
+          EMPTY_TRAIL_FILTERS,
+          meetups,
+          searchText
+        );
+
+
+      if (
+        !isZipCode &&
+        localMatches.length >
+          0
+      ) {
+
+        locationSearchActiveRef.current =
+          false;
+
+        setIsLocationSearchActive(
+          false
+        );
+
+        setFilterQuery(
+          searchText
+        );
+
+        setError(
+          null
+        );
+
+        return;
+      }
+
+
+      if (mountedRef.current) {
+
+        setIsSearchingQuery(
+          true
+        );
+
+        setError(
+          null
+        );
+      }
+
+
+      try {
+
+        // Purpose:
+        // ZIP and city searches use Mission Trails'
+        // server-side geocoder instead of the phone's
+        // native geocoder.
+        const geocodeText =
+          isZipCode
+            ? `${searchText}, United States`
+            : searchText;
+
+
+        const match =
+          await geocodeTrailLocation(
+            geocodeText
+          );
+
+
+        if (!match) {
+
+          if (mountedRef.current) {
+
+            setError(
+              `We couldn't find "${searchText}". Try a city, ZIP code, park, or trail name.`
+            );
+          }
+
+          return;
+        }
+
+
+        const center:
+          TrailSearchCoordinate = {
+            latitude:
+              match.latitude,
+
+            longitude:
+              match.longitude,
+          };
+
+
+        locationSearchActiveRef.current =
+          true;
+
+
+        if (mountedRef.current) {
+
+          setIsLocationSearchActive(
+            true
+          );
+
+
+          // Purpose:
+          // The location text identifies the search center.
+          // It should not also filter trail names afterward.
+          setFilterQuery(
+            ''
+          );
+
+
+          // Purpose:
+          // A new location search begins with the full
+          // catalog instead of carrying a previous filter.
+          setFilters({
+            selected: [],
+          });
+
+
+          setIsRefreshing(
+            true
+          );
+        }
+
+
+        logTrailDebug(
+          'City / ZIP search resolved.',
+          {
+            query:
+              searchText,
+
+            latitude:
+              center.latitude,
+
+            longitude:
+              center.longitude,
+          }
+        );
+
+
+        await loadCatalog(
+          center,
+          {
+            forceRefresh:
+              true,
+          }
+        );
+
+      } catch (searchError) {
+
+        logLocationProblem(
+          'City / ZIP geocoding failed.',
+          searchError
+        );
+
+
+        if (mountedRef.current) {
+
+          setError(
+            'That location could not be searched right now. Try the ZIP code or city again.'
+          );
+        }
+
+      } finally {
+
+        if (mountedRef.current) {
+
+          setIsSearchingQuery(
+            false
+          );
+
+          setIsRefreshing(
+            false
+          );
+        }
+      }
+    },
+    [
+      allTrails,
+      loadCatalog,
+      meetups,
+      query,
+    ]
+  );
+
+
   const trails = useMemo(
-    () => filterTrails(allTrails, filters, meetups, query),
-    [allTrails, filters, meetups, query],
+    () => {
+
+      const filteredTrails =
+        filterTrails(
+          allTrails,
+          filters,
+          meetups,
+          query
+        );
+
+
+      return filteredTrails;
+    },
+    [
+      allTrails,
+      filters,
+      meetups,
+      query,
+    ],
   );
 
   const meetupCounts = useMemo(() => meetups.reduce<Record<string, number>>((counts, meetup) => {
@@ -415,10 +756,14 @@ export function useNearbyTrails() {
     totalResults: allTrails.length,
     meetups,
     meetupCounts,
+    refreshMeetups,
     filters,
     setFilters,
     query,
     setQuery,
+    searchQuery,
+    isSearchingQuery,
+    isLocationSearchActive,
     favoriteIds,
     favoriteBusyIds,
     toggleFavorite,

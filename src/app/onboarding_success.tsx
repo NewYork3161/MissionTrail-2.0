@@ -61,6 +61,7 @@ export default function OnboardingSuccess() {
     city?: string;
     state?: string;
     country?: string;
+    questionnaireAnswers?: string;
     accountAccessMode?: string;
     idVerificationStatus?: string;
   }>();
@@ -115,6 +116,9 @@ export default function OnboardingSuccess() {
 
         country:
           params.country ?? '',
+
+        questionnaireAnswers:
+          params.questionnaireAnswers ?? '{}',
 
         accountAccessMode:
           isKidsMode

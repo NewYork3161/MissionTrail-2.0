@@ -525,8 +525,17 @@ export default function HomeScreen() {
     [gpsPoints],
   );
 
+  // Purpose: Shows realistic walking miles from the phone's live step count.
+  //
+  // The secure GPS distance remains untouched for missions, relics and rewards.
+  // This display avoids indoor GPS drift making Today's Exploring miles jump.
+  const displayWalkingMiles =
+    dailyActivity.todaySteps > 0
+      ? estimateWalkingMilesFromSteps(dailyActivity.todaySteps)
+      : dailyActivity.todayDistanceMiles;
+
   const liveStats = getLiveStats(
-    dailyActivity.todayDistanceMiles,
+    displayWalkingMiles,
     dailyActivity.todaySteps,
     collectedRelicIds.length,
     RELICS.length,
@@ -1537,7 +1546,11 @@ function buildVisualGpsTrack(
   const accuratePoints = points.filter((point) => {
     const accuracy = point.coords.accuracy;
 
-    return accuracy === null || accuracy === undefined || accuracy <= 35;
+    return (
+      accuracy === null ||
+      accuracy === undefined ||
+      accuracy <= MAX_ACCEPTED_GPS_ACCURACY_METERS
+    );
   });
 
   const source = accuratePoints.length > 0 ? accuratePoints : points.slice(-1);
@@ -1570,12 +1583,23 @@ function buildVisualGpsTrack(
 
     const impliedSpeedMetersPerSecond = distanceMeters / elapsedSeconds;
 
+    const maximumVisualAccuracy = Math.max(
+      previous.coords.accuracy ?? 0,
+      point.coords.accuracy ?? 0,
+    );
+
+    // Purpose: Requires movement to exceed normal GPS uncertainty.
+    const visualMovementThreshold = Math.max(
+      4,
+      Math.min(30, maximumVisualAccuracy * 1.25),
+    );
+
     // Ignore tiny stationary GPS movements.
     //
     // We compare against the last ACCEPTED visual point,
     // so real walking will eventually accumulate enough
     // distance to create the next footprint.
-    if (distanceMeters < 3.5) {
+    if (distanceMeters < visualMovementThreshold) {
       continue;
     }
 
@@ -1607,6 +1631,20 @@ function getSpeedMph(location?: Location.LocationObject) {
 // =======================
 // LIVE STATS
 // =======================
+
+// Purpose: Estimates visible walking miles from real phone steps.
+function estimateWalkingMilesFromSteps(steps: number) {
+  // About 2.5 feet per step, used only for the Home activity display.
+  const strideMeters = 0.762;
+  const metersPerMile = 1609.344;
+
+  const safeSteps = Math.max(
+    0,
+    Number.isFinite(steps) ? Math.floor(steps) : 0,
+  );
+
+  return (safeSteps * strideMeters) / metersPerMile;
+}
 
 // Purpose: Returns live stats.
 function getLiveStats(
@@ -1770,7 +1808,6 @@ function renderWalkedPath(coordinates: ReturnType<typeof makeMapCoordinate>[]) {
 // =======================
 
 const FOOTPRINT_MIN_MOVEMENT_METERS = 4;
-const FOOTPRINT_WALKING_SPEED_METERS_PER_SECOND = 0.65;
 
 // Purpose: Measures visual GPS movement without changing secure GPS evidence.
 function getFootprintDistanceMeters(
@@ -1828,18 +1865,18 @@ function getWalkingFootprintLocations(locations: Location.LocationObject[]) {
     // walking the player's icon around the map.
     const accuracyMovementThreshold = Math.max(
       FOOTPRINT_MIN_MOVEMENT_METERS,
-      Math.min(8, maximumAccuracy * 0.75),
+      Math.min(30, maximumAccuracy * 1.25),
     );
 
     const speedMetersPerSecond = Math.max(0, location.coords.speed ?? 0);
 
     const movingByDistance = distanceMeters >= accuracyMovementThreshold;
 
-    const movingByWalkingSpeed =
-      speedMetersPerSecond >= FOOTPRINT_WALKING_SPEED_METERS_PER_SECOND &&
-      distanceMeters >= 1.5;
+    const speedLooksPlausible =
+      speedMetersPerSecond <= speedLimitMetersPerSecond;
 
-    if (movingByDistance || movingByWalkingSpeed) {
+    // Purpose: Moves footprints only after movement clears GPS uncertainty.
+    if (movingByDistance && speedLooksPlausible) {
       walkingLocations.push(location);
     }
   }

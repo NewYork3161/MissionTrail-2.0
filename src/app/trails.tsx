@@ -1,5 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import {
+  useFocusEffect,
+  useLocalSearchParams,
+  useRouter,
+} from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -169,11 +173,36 @@ function VerifiedTrailsScreen() {
   const { focus } = useLocalSearchParams<{ focus?: string }>();
   const safeArea = useSafeAreaInsets();
   const discovery = useNearbyTrails();
+
+  // Purpose:
+  // Reloads current Supabase Meetups whenever the user
+  // returns to Trails from another screen.
+  //
+  // This makes a newly-created Meetup immediately available
+  // to Meetup counts and the Meetups Today filter.
+  useFocusEffect(
+    useCallback(
+      () => {
+
+        void discovery.refreshMeetups();
+
+      },
+      [
+        discovery.refreshMeetups,
+      ]
+    )
+  );
+
+
+
   const mapRef = useRef<any>(null);
   const shownLocationAlertRef = useRef<'denied' | 'services_off' | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedTrailId, setSelectedTrailId] = useState<string | null>(null);
-  const isBusy = discovery.isLoading || discovery.isRefreshing;
+  const isBusy =
+    discovery.isLoading ||
+    discovery.isRefreshing ||
+    discovery.isSearchingQuery;
 
   // Reuses the selected marker, or safely falls back to the first visible trail.
   const selectedTrail = useMemo(
@@ -191,13 +220,28 @@ function VerifiedTrailsScreen() {
   // Moves the camera to a valid device or simulator GPS fix.
   // initialRegion only controls the first map render, so animation is required.
   useEffect(() => {
-    if (Platform.OS === 'web' || viewMode !== 'map' || !discovery.locationCenter) return;
+    const center =
+      discovery.searchCenter ??
+      discovery.locationCenter;
+
+    if (
+      Platform.OS === 'web' ||
+      viewMode !== 'map' ||
+      !center
+    ) {
+      return;
+    }
+
     mapRef.current?.animateToRegion({
-      ...discovery.locationCenter,
-      latitudeDelta: 0.012,
-      longitudeDelta: 0.012,
+      ...center,
+      latitudeDelta: 0.12,
+      longitudeDelta: 0.12,
     }, 650);
-  }, [discovery.locationCenter, viewMode]);
+  }, [
+    discovery.locationCenter,
+    discovery.searchCenter,
+    viewMode,
+  ]);
 
   // Retries GPS and alerts once only for physical-device permission settings.
   // Purpose: Finds my exact location.
@@ -268,7 +312,11 @@ function VerifiedTrailsScreen() {
       meetupCount={discovery.meetupCounts[item.id] ?? 0}
       favorite={discovery.favoriteIds.includes(item.id)}
       favoriteBusy={discovery.favoriteBusyIds.includes(item.id)}
-      showDistance={discovery.locationStatus === 'granted'}
+      showDistance={
+        discovery.locationStatus ===
+          'granted' &&
+        !discovery.isLocationSearchActive
+      }
       selected={item.id === selectedTrailId}
       onSelect={() => void openTrail(item)}
       onViewDetails={() => void openTrail(item)}
@@ -292,9 +340,21 @@ function VerifiedTrailsScreen() {
         </View>
         <TrailSearchBar
           value={discovery.query}
-          onChangeText={discovery.setQuery}
-          isLocating={isBusy}
-          onUseLocation={() => void findMyExactLocation()}
+          onChangeText={
+            discovery.setQuery
+          }
+          onSubmitSearch={() =>
+            void discovery.searchQuery()
+          }
+          isSearching={
+            discovery.isSearchingQuery
+          }
+          isLocating={
+            isBusy
+          }
+          onUseLocation={() =>
+            void findMyExactLocation()
+          }
         />
         <TrailFiltersView filters={discovery.filters} onChange={discovery.setFilters} />
       </View>
@@ -356,7 +416,13 @@ function VerifiedTrailsScreen() {
             refreshing={discovery.isRefreshing}
             onRefresh={() => void discovery.refresh(true)}
             contentContainerStyle={[styles.list, { paddingBottom: safeArea.bottom + 112 }]}
-            ListHeaderComponent={<View style={styles.resultsRow}><Text style={styles.resultsTitle}>{discovery.trails.length} trails found</Text><Text style={styles.resultsMeta}>{discovery.locationStatus === 'granted' ? 'Within 25 mi · nearest first' : 'Location required'}</Text></View>}
+            ListHeaderComponent={<View style={styles.resultsRow}><Text style={styles.resultsTitle}>{discovery.trails.length} trails found</Text><Text style={styles.resultsMeta}>
+              {discovery.isLocationSearchActive
+                ? 'Within 25 mi of search'
+                : discovery.locationStatus === 'granted'
+                  ? 'Within 25 mi · nearest first'
+                  : 'Location required'}
+            </Text></View>}
             ListEmptyComponent={discovery.error ? null : (
               <TrailsEmptyState
                 locationRequired={discovery.locationStatus !== 'granted'}
@@ -373,14 +439,18 @@ function VerifiedTrailsScreen() {
         <View style={styles.mapWrap}>
           {Platform.OS === 'web' ? (
             <View style={styles.mapState}><Ionicons name="map-outline" size={34} color={C.cyan} /><Text style={styles.mapStateText}>Interactive trail markers are available on iOS and Android.</Text></View>
-          ) : !discovery.locationCenter ? (
+          ) : !(discovery.searchCenter ?? discovery.locationCenter) ? (
             <View style={styles.mapState}><Ionicons name="location-outline" size={34} color={C.cyan} /><Text style={styles.mapStateText}>Your location is needed to display nearby trail markers.</Text></View>
           ) : (
             <MapView
               ref={mapRef}
               provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
               style={StyleSheet.absoluteFill}
-              initialRegion={{ ...discovery.locationCenter, latitudeDelta: 0.18, longitudeDelta: 0.18 }}
+              initialRegion={{
+                ...(discovery.searchCenter ?? discovery.locationCenter!),
+                latitudeDelta: 0.18,
+                longitudeDelta: 0.18,
+              }}
               showsUserLocation={discovery.locationStatus === 'granted'}
               showsMyLocationButton={false}
               userInterfaceStyle="dark"

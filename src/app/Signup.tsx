@@ -50,6 +50,7 @@ export default function SignupScreen() {
     city?: string;
     state?: string;
     country?: string;
+    questionnaireAnswers?: string;
     accountAccessMode?: string;
     idVerificationStatus?: string;
   }>();
@@ -331,6 +332,11 @@ export default function SignupScreen() {
               typeof params.country === "string"
                 ? params.country.trim()
                 : "",
+
+            questionnaire_answers:
+              typeof params.questionnaireAnswers === "string"
+                ? params.questionnaireAnswers
+                : "{}",
 
             // Purpose:
             // Tells the signup trigger which onboarding path

@@ -1,5 +1,7 @@
+import { router as expoRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import {
@@ -355,6 +357,12 @@ const PLAY_GAMES: {
   icon: IoniconName;
 }[] = [
   {
+    id: 'food-sort',
+    title: 'Companion Food Sort',
+    subtitle: 'Match food • 20 moves',
+    icon: 'nutrition-outline',
+  },
+  {
     id: 'stars',
     title: 'Chase Stars',
     subtitle: 'Speed challenge',
@@ -436,6 +444,19 @@ export default function CompanionScreen() {
       companion?.energy ?? 0,
       companion?.maximumEnergy ?? 100,
     );
+
+  // Purpose: Keeps every care stat safely between 0 and 100.
+  const hungerPercent =
+    clampPercent(companion?.hunger ?? 0);
+
+  const happinessPercent =
+    clampPercent(companion?.happiness ?? 0);
+
+  const healthPercent =
+    clampPercent(companion?.health ?? 0);
+
+  const careStreak =
+    Math.max(0, companion?.careStreak ?? 0);
 
   const playerLevel =
     getPlayerLevelProgress(progress?.totalXp ?? 0);
@@ -864,9 +885,6 @@ export default function CompanionScreen() {
       const hpAwarded =
         Number(result.hp_awarded ?? selectedFood.hp);
 
-      const xpAwarded =
-        Number(result.xp_awarded ?? selectedFood.xp);
-
       const oldLevel =
         Number(result.old_companion_level ?? 1);
 
@@ -878,11 +896,11 @@ export default function CompanionScreen() {
 
       if (newLevel > oldLevel) {
         setFeedMessage(
-          `${selectedFood.name} fed! +${hpAwarded} HP • +${xpAwarded} XP • Companion Lv ${oldLevel} → Lv ${newLevel} ⚡`,
+          `${selectedFood.name} fed! +${hpAwarded} Growth HP • Care updated • Companion Lv ${oldLevel} → Lv ${newLevel} ⚡`,
         );
       } else {
         setFeedMessage(
-          `${selectedFood.name} fed! +${hpAwarded} HP • +${xpAwarded} XP • x${remaining} left`,
+          `${selectedFood.name} fed! +${hpAwarded} Growth HP • Care updated • x${remaining} left`,
         );
       }
 
@@ -937,7 +955,7 @@ export default function CompanionScreen() {
           styles.content,
           {
             paddingTop: safeArea.top + 14,
-            paddingBottom: safeArea.bottom + 120,
+            paddingBottom: safeArea.bottom + 190,
           },
         ]}
       >
@@ -950,6 +968,10 @@ export default function CompanionScreen() {
             bondPercent={bondPercent}
             bondTier={companion?.bondTier ?? 1}
             energyPercent={energyPercent}
+            hungerPercent={hungerPercent}
+            happinessPercent={happinessPercent}
+            healthPercent={healthPercent}
+            careStreak={careStreak}
             totalXp={playerLevel.totalXp}
             playerLevel={playerLevel.level}
             todayDistanceKm={todayDistanceKm}
@@ -1095,6 +1117,10 @@ function HomeView({
   bondPercent,
   bondTier,
   energyPercent,
+  hungerPercent,
+  happinessPercent,
+  healthPercent,
+  careStreak,
   totalXp,
   playerLevel,
   todayDistanceKm,
@@ -1119,6 +1145,13 @@ function HomeView({
   bondPercent: number;
   bondTier: number;
   energyPercent: number;
+
+  // Tamagotchi-style care stats.
+  hungerPercent: number;
+  happinessPercent: number;
+  healthPercent: number;
+  careStreak: number;
+
   totalXp: number;
   playerLevel: number;
   todayDistanceKm: number;
@@ -1384,6 +1417,70 @@ function HomeView({
 
               <Text style={homeStyles.statusLabel}>
                 Energy
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="restaurant"
+                size={14}
+                color="#FFB84D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${hungerPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Hunger
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="happy"
+                size={14}
+                color="#FFD84D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${happinessPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Happy
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="medkit"
+                size={14}
+                color="#62FF9D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${healthPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Health
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="flame"
+                size={14}
+                color="#FF784D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${careStreak}` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Streak
               </Text>
             </View>
           </View>
@@ -1675,7 +1772,17 @@ function FeedView({
         </Text>
       </View>
 
-      <View style={styles.coinWalletCard}>
+      <Pressable
+        onPress={() =>
+          expoRouter.push('/explorer-coin-shop')
+        }
+        style={({ pressed }) => [
+          styles.coinWalletCard,
+          pressed
+            ? styles.coinWalletCardPressed
+            : undefined,
+        ]}
+      >
         <View style={styles.coinWalletIcon}>
           <Image
             source={explorerCoinImage}
@@ -1692,14 +1799,18 @@ function FeedView({
           <Text style={styles.coinWalletBalance}>
             {coinBalance.toLocaleString()}
           </Text>
+
+          <Text style={styles.coinWalletShopHint}>
+            Tap to get more coins
+          </Text>
         </View>
 
         <Ionicons
-          name="sparkles"
-          size={18}
+          name="chevron-forward"
+          size={20}
           color="#FFD76A"
         />
-      </View>
+      </Pressable>
 
       <View style={styles.foodTabs}>
         <Pressable
@@ -1779,8 +1890,9 @@ function FeedView({
             />
 
             <Text style={styles.noticeText}>
-              Feed owned food to gain Companion
-              Growth HP and Explorer XP.
+              Feed owned food to improve Hunger,
+              Happiness, Health, Bond, Growth HP, and
+              earn capped Explorer Score.
             </Text>
           </View>
 
@@ -1893,7 +2005,7 @@ function FeedView({
                           styles.foodXpText
                         }
                       >
-                        +{food.xp} XP
+                        Up to +20 Score
                       </Text>
                     </View>
 
@@ -1978,7 +2090,7 @@ function FeedView({
                 >
                   +{selectedFood.hp} Growth HP
                   {' • '}
-                  +{selectedFood.xp} Explorer XP
+                  Up to +20 Explorer Score
                 </Text>
 
                 <Text
@@ -2158,7 +2270,7 @@ function FeedView({
                           styles.foodXpText
                         }
                       >
-                        +{food.xp} XP
+                        Up to +20 Score
                       </Text>
                     </View>
 
@@ -2404,6 +2516,8 @@ function PlayView({
   companionName: string;
   onBack: () => void;
 }) {
+  const router = useRouter();
+
   return (
     <>
       <SubHeader
@@ -2433,12 +2547,17 @@ function PlayView({
         {PLAY_GAMES.map((game) => (
           <Pressable
             key={game.id}
-            onPress={() =>
+            onPress={() => {
+              if (game.id === 'food-sort') {
+                router.push('/companion-food-sort');
+                return;
+              }
+
               Alert.alert(
                 game.title,
-                `${game.title} is ready as a UI entry. We'll build the actual mini-game logic separately.`,
-              )
-            }
+                `${game.title} is still being built.`,
+              );
+            }}
             style={styles.gameCard}
           >
             <View style={styles.gameIcon}>
@@ -2830,36 +2949,37 @@ function capitalize(
 // =========================================================
 const homeStyles = StyleSheet.create({
   identityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 18,
     width: '100%',
+    position: 'relative',
   },
 
   identityCard: {
-    flex: 1,
-    minHeight: 112,
+    width: '100%',
+    minHeight: 118,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: '#493552',
     backgroundColor: 'rgba(8, 5, 17, 0.96)',
-    paddingHorizontal: 24,
-    paddingVertical: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingLeft: 18,
+    paddingRight: 78,
+    paddingVertical: 16,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 10,
   },
 
   identityCopy: {
-    flex: 1,
-    paddingRight: 16,
+    width: '100%',
+    paddingRight: 0,
   },
 
   identityName: {
     color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '800',
-    letterSpacing: 1,
+    fontSize: 23,
+    lineHeight: 28,
+    fontWeight: '900',
+    letterSpacing: 0.6,
   },
 
   identitySubtitle: {
@@ -2869,8 +2989,10 @@ const homeStyles = StyleSheet.create({
   },
 
   bondBlock: {
-    alignItems: 'flex-end',
-    gap: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap',
   },
 
   bondLine: {
@@ -2901,14 +3023,18 @@ const homeStyles = StyleSheet.create({
   },
 
   menuButton: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+    position: 'absolute',
+    top: 15,
+    right: 14,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     borderWidth: 1,
     borderColor: '#D53FFF',
-    backgroundColor: 'rgba(17, 5, 27, 0.96)',
+    backgroundColor: 'rgba(17, 5, 27, 0.98)',
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 10,
   },
 
   dropdownMenu: {
@@ -2943,11 +3069,11 @@ const homeStyles = StyleSheet.create({
   },
 
   speechBubble: {
-    alignSelf: 'flex-start',
-    marginLeft: '7%',
-    maxWidth: 390,
-    minHeight: 78,
-    borderRadius: 22,
+    alignSelf: 'center',
+    width: '92%',
+    maxWidth: 360,
+    minHeight: 64,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: '#D44AFF',
     backgroundColor: 'rgba(36, 5, 53, 0.95)',
@@ -2968,27 +3094,25 @@ const homeStyles = StyleSheet.create({
 
   heroLayout: {
     width: '100%',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 20,
+    gap: 18,
   },
 
   orbColumn: {
-    flexGrow: 1,
-    flexBasis: 500,
-    minWidth: 300,
-    maxWidth: 470,
+    width: '100%',
+    maxWidth: 360,
     alignItems: 'center',
   },
 
   orbBorder: {
-    width: '100%',
-    maxWidth: 420,
+    width: '82%',
+    maxWidth: 310,
     aspectRatio: 1,
     borderRadius: 999,
     padding: 3,
+    alignSelf: 'center',
   },
 
   orbMiddle: {
@@ -3009,8 +3133,8 @@ const homeStyles = StyleSheet.create({
   },
 
   companionImage: {
-    width: '76%',
-    height: '76%',
+    width: '72%',
+    height: '72%',
   },
 
   emptyCompanion: {
@@ -3048,48 +3172,54 @@ const homeStyles = StyleSheet.create({
   },
 
   statusRow: {
+    width: '100%',
+    maxWidth: 350,
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    gap: 10,
-    marginTop: 18,
+    gap: 8,
+    marginTop: 14,
   },
 
   statusPill: {
-    minHeight: 34,
-    borderRadius: 99,
+    flexBasis: '30%',
+    flexGrow: 1,
+    maxWidth: 112,
+    minWidth: 100,
+    minHeight: 44,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: '#5C2B67',
     backgroundColor: 'rgba(15, 6, 20, 0.94)',
-    paddingHorizontal: 13,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
+    gap: 4,
   },
 
   statusValue: {
     color: '#FFFFFF',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
   },
 
   statusLabel: {
     color: '#A89AAC',
-    fontSize: 10,
-    fontWeight: '700',
+    fontSize: 9,
+    fontWeight: '800',
   },
 
   sideColumn: {
-    flexGrow: 1,
-    flexBasis: 270,
-    minWidth: 250,
-    maxWidth: 300,
-    gap: 16,
+    width: '92%',
+    maxWidth: 360,
+    gap: 12,
   },
 
   infoCard: {
-    minHeight: 145,
-    borderRadius: 19,
+    minHeight: 118,
+    borderRadius: 17,
     borderWidth: 1,
     borderColor: '#35273E',
     backgroundColor: 'rgba(9, 6, 18, 0.97)',
@@ -3140,9 +3270,9 @@ const homeStyles = StyleSheet.create({
   },
 
   todayCard: {
-    width: '72%',
-    minWidth: 300,
-    maxWidth: 720,
+    width: '92%',
+    minWidth: 0,
+    maxWidth: 360,
     alignSelf: 'center',
     minHeight: 96,
     borderRadius: 20,
@@ -3776,6 +3906,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+  },
+
+  coinWalletCardPressed: {
+    opacity: 0.78,
+    transform: [
+      {
+        scale: 0.99,
+      },
+    ],
+  },
+
+  coinWalletShopHint: {
+    color: '#A98CB8',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 3,
   },
 
   coinWalletIcon: {

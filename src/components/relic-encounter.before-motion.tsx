@@ -37,6 +37,7 @@ type RelicEncounterProps = {
   onClose: () => void;
 };
 
+// Purpose: Renders the interactive encounter for a nearby relic.
 export function RelicEncounter({
   visible,
   relic,
@@ -158,6 +159,7 @@ export function RelicEncounter({
       ? "LOCATION VERIFIED"
       : `${freshFinalReadingCount} / 3 LOCATION CHECKS`;
 
+  // Purpose: Starts collecting the relic when the player touches it.
   function touchRelic() {
     if (isBusy) return;
 

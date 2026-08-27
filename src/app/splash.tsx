@@ -883,12 +883,18 @@ export default function SplashScreen() {
   }, [fadeAnim]);
 
   // Student note: Handles the enter action.
-  // Purpose: Handles enter.
+  // Purpose:
+  // Opens the Login screen when the user presses ENTER.
+  //
+  // Startup navigation does not skip Login or onboarding
+  // just because a Supabase session is already stored.
   const handleEnter = () => {
 
-  router.replace('/onboarding_user_info');
+    router.replace(
+      '/login'
+    );
 
-};
+  };
 
   return (
 

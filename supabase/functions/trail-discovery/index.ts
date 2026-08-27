@@ -9,11 +9,12 @@ import {
 
 type Coordinate = { latitude?: number; longitude?: number };
 type TrailRequest = {
-  action?: 'search' | 'route';
+  action?: 'search' | 'route' | 'geocode';
   center?: Coordinate;
   origin?: Coordinate;
   destination?: Coordinate;
   radiusMeters?: number;
+  query?: string;
 };
 
 const corsHeaders = {
@@ -178,6 +179,114 @@ Deno.serve(async (request) => {
     });
     if (rate.error) throw new Error('RATE_CHECK_FAILED');
     if (!rate.data) return response({ error: 'RATE_LIMITED', message: 'Please wait a moment before searching again.', requestId }, 429);
+
+    // Purpose:
+    // Converts a city or ZIP/postal code into coordinates
+    // using the trusted server-side Geoapify geocoder.
+    //
+    // This avoids relying on the phone's native geocoder,
+    // which can fail on ZIP-only searches.
+    if (body.action === 'geocode') {
+
+      const query =
+        body.query?.trim();
+
+      if (!query) {
+        return response(
+          {
+            location: null,
+            requestId,
+          },
+          200,
+        );
+      }
+
+
+      const parameters =
+        new URLSearchParams({
+          text: query,
+          format: 'json',
+          limit: '1',
+          lang: 'en',
+        });
+
+
+      const data =
+        await geoapify(
+          '/v1/geocode/search',
+          parameters,
+        );
+
+
+      const results =
+        Array.isArray(data.results)
+          ? data.results
+          : [];
+
+
+      const first =
+        results.find(
+          (item) => {
+
+            if (
+              typeof item !== 'object' ||
+              item === null
+            ) {
+              return false;
+            }
+
+            const candidate =
+              item as {
+                lat?: unknown;
+                lon?: unknown;
+                formatted?: unknown;
+              };
+
+            return (
+              typeof candidate.lat ===
+                'number' &&
+              Number.isFinite(
+                candidate.lat
+              ) &&
+              typeof candidate.lon ===
+                'number' &&
+              Number.isFinite(
+                candidate.lon
+              )
+            );
+          }
+        ) as
+          | {
+              lat: number;
+              lon: number;
+              formatted?: string;
+            }
+          | undefined;
+
+
+      if (!first) {
+        return response(
+          {
+            location: null,
+            requestId,
+          },
+          200,
+        );
+      }
+
+
+      return response({
+        location: {
+          latitude: first.lat,
+          longitude: first.lon,
+          formatted:
+            first.formatted ??
+            query,
+        },
+        requestId,
+      });
+    }
+
 
     if (body.action === 'search') {
       if (!validCoordinate(body.center)) return response({ error: 'INVALID_COORDINATE', requestId }, 400);

@@ -58,6 +58,14 @@ export type VerifiedDailyProgress = {
     companionLevel?: number;
     hpIntoLevel?: number;
     hpRequired?: number;
+
+    // Tamagotchi-style companion care stats.
+    hunger?: number;
+    happiness?: number;
+    health?: number;
+    careStreak?: number;
+    lastFedAt?: string | null;
+    lastHealthyDate?: string | null;
   };
   localDate: string;
   timezone: string;

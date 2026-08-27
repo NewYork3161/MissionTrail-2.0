@@ -84,21 +84,313 @@ function categoryFrom(categories: string[], raw: Record<string, unknown>): Norma
   return 'trail';
 }
 
-// Difficulty is returned only when OpenStreetMap supplied an explicit hiking
-// grade. We never infer it from route length, terrain, or a place category.
-// Purpose: Implements the difficulty from operation.
-function difficultyFrom(raw: Record<string, unknown>): NormalizedTrail['difficulty'] {
-  const explicit = readString(raw, 'difficulty')?.toLowerCase();
-  if (explicit === 'easy' || explicit === 'moderate' || explicit === 'challenging') return explicit;
-  const sacScale = readString(raw, 'sac_scale')?.toLowerCase();
-  if (!sacScale) return 'unknown';
-  if (sacScale === 'hiking') return 'easy';
-  if (sacScale === 'mountain_hiking' || sacScale === 'demanding_mountain_hiking') return 'moderate';
-  if (['alpine_hiking', 'demanding_alpine_hiking', 'difficult_alpine_hiking'].includes(sacScale)) {
+// Purpose:
+// Converts OpenStreetMap difficulty and trail-condition tags
+// into the three difficulty levels shown by Mission Trails.
+//
+// Explicit hiking grades always win. When a trail does not
+// provide a formal hiking grade, safe provider tags such as
+// surface, smoothness, track type, incline, and MTB scale are
+// used as a practical fallback.
+//
+// When there still is not enough information, the trail stays
+// "unknown" instead of inventing a difficulty.
+function difficultyFrom(
+  raw: Record<string, unknown>,
+): NormalizedTrail['difficulty'] {
+
+  const explicit =
+    readString(
+      raw,
+      'difficulty'
+    )?.toLowerCase();
+
+
+  if (
+    explicit === 'easy' ||
+    explicit === 'moderate' ||
+    explicit === 'challenging'
+  ) {
+    return explicit;
+  }
+
+
+  const sacScale =
+    readString(
+      raw,
+      'sac_scale'
+    )?.toLowerCase();
+
+
+  if (sacScale === 'hiking') {
+    return 'easy';
+  }
+
+
+  if (
+    sacScale === 'mountain_hiking' ||
+    sacScale ===
+      'demanding_mountain_hiking'
+  ) {
+    return 'moderate';
+  }
+
+
+  if (
+    [
+      'alpine_hiking',
+      'demanding_alpine_hiking',
+      'difficult_alpine_hiking',
+    ].includes(
+      sacScale ?? ''
+    )
+  ) {
     return 'challenging';
   }
+
+
+  // Purpose:
+  // Uses OSM mountain-bike technical scale as another
+  // provider-supplied indication of trail difficulty.
+  const mtbScaleText =
+    readString(
+      raw,
+      'mtb:scale'
+    );
+
+
+  if (mtbScaleText) {
+
+    const mtbScale =
+      Number.parseInt(
+        mtbScaleText,
+        10
+      );
+
+
+    if (
+      Number.isFinite(
+        mtbScale
+      )
+    ) {
+
+      if (mtbScale >= 4) {
+        return 'challenging';
+      }
+
+
+      if (mtbScale >= 2) {
+        return 'moderate';
+      }
+
+
+      if (mtbScale >= 0) {
+        return 'easy';
+      }
+    }
+  }
+
+
+  // Purpose:
+  // Reads a numeric OSM incline when one is available.
+  // Steeper grades move a trail into a harder category.
+  const inclineText =
+    readString(
+      raw,
+      'incline'
+    );
+
+
+  if (inclineText) {
+
+    const incline =
+      Number.parseFloat(
+        inclineText.replace(
+          '%',
+          ''
+        )
+      );
+
+
+    if (
+      Number.isFinite(
+        incline
+      )
+    ) {
+
+      const absoluteIncline =
+        Math.abs(
+          incline
+        );
+
+
+      if (
+        absoluteIncline >= 18
+      ) {
+        return 'challenging';
+      }
+
+
+      if (
+        absoluteIncline >= 8
+      ) {
+        return 'moderate';
+      }
+    }
+  }
+
+
+  const smoothness =
+    readString(
+      raw,
+      'smoothness'
+    )?.toLowerCase();
+
+
+  if (
+    [
+      'very_bad',
+      'horrible',
+      'very_horrible',
+      'impassable',
+    ].includes(
+      smoothness ?? ''
+    )
+  ) {
+    return 'challenging';
+  }
+
+
+  if (
+    [
+      'bad',
+      'intermediate',
+    ].includes(
+      smoothness ?? ''
+    )
+  ) {
+    return 'moderate';
+  }
+
+
+  if (
+    [
+      'excellent',
+      'good',
+    ].includes(
+      smoothness ?? ''
+    )
+  ) {
+    return 'easy';
+  }
+
+
+  const surface =
+    readString(
+      raw,
+      'surface'
+    )?.toLowerCase();
+
+
+  if (
+    [
+      'asphalt',
+      'concrete',
+      'paved',
+      'paving_stones',
+      'compacted',
+      'fine_gravel',
+      'wood',
+    ].includes(
+      surface ?? ''
+    )
+  ) {
+    return 'easy';
+  }
+
+
+  if (
+    [
+      'gravel',
+      'dirt',
+      'earth',
+      'ground',
+      'unpaved',
+      'woodchips',
+      'grass',
+    ].includes(
+      surface ?? ''
+    )
+  ) {
+    return 'moderate';
+  }
+
+
+  if (
+    [
+      'rock',
+      'stone',
+      'scree',
+      'pebblestone',
+    ].includes(
+      surface ?? ''
+    )
+  ) {
+    return 'challenging';
+  }
+
+
+  const trackType =
+    readString(
+      raw,
+      'tracktype'
+    )?.toLowerCase();
+
+
+  if (
+    trackType === 'grade1'
+  ) {
+    return 'easy';
+  }
+
+
+  if (
+    trackType === 'grade2' ||
+    trackType === 'grade3'
+  ) {
+    return 'moderate';
+  }
+
+
+  if (
+    trackType === 'grade4' ||
+    trackType === 'grade5'
+  ) {
+    return 'challenging';
+  }
+
+
+  const highway =
+    readString(
+      raw,
+      'highway'
+    )?.toLowerCase();
+
+
+  // Purpose:
+  // Clearly pedestrian-focused mapped surfaces are treated
+  // as Easy when no conflicting difficulty information exists.
+  if (
+    highway === 'pedestrian' ||
+    highway === 'footway'
+  ) {
+    return 'easy';
+  }
+
+
   return 'unknown';
 }
+
 
 // Purpose: Implements the category from osm tags operation.
 function categoryFromOsmTags(tags: Record<string, string>): NormalizedTrail['category'] {
@@ -126,10 +418,205 @@ function categoryFromOsmTags(tags: Record<string, string>): NormalizedTrail['cat
   return 'trail';
 }
 
-// Purpose: Implements the osm address operation.
-function osmAddress(tags: Record<string, string>) {
-  const street = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ');
-  return [street, tags['addr:city'], tags['addr:state']].filter(Boolean).join(', ') || undefined;
+// Purpose:
+// Converts mapped trail accessibility information into a
+// value Mission Trails can safely use.
+//
+// Explicit wheelchair tags always win.
+//
+// Without an explicit wheelchair tag, Mission Trails may
+// identify a paved/compact pedestrian route as a mapped
+// accessibility candidate. This is not a guarantee.
+function accessibilityFromMappedData(
+  raw: Record<string, unknown>,
+  wheelchairOverride?: string,
+) {
+
+  const wheelchair =
+    (
+      wheelchairOverride ??
+      readString(
+        raw,
+        'wheelchair'
+      )
+    )
+      ?.trim()
+      .toLowerCase();
+
+
+  if (wheelchair) {
+
+    return (
+      `Wheelchair access: ${wheelchair}`
+    );
+  }
+
+
+  const highway =
+    readString(
+      raw,
+      'highway'
+    )?.toLowerCase();
+
+
+  // Purpose:
+  // Routes mapped as steps must never be treated as
+  // accessibility candidates.
+  if (
+    highway === 'steps'
+  ) {
+
+    return (
+      'Wheelchair access: no'
+    );
+  }
+
+
+  const surface =
+    readString(
+      raw,
+      'surface'
+    )?.toLowerCase();
+
+
+  const smoothness =
+    readString(
+      raw,
+      'smoothness'
+    )?.toLowerCase();
+
+
+  const inclineText =
+    readString(
+      raw,
+      'incline'
+    );
+
+
+  let incline:
+    number | null =
+      null;
+
+
+  if (inclineText) {
+
+    const parsed =
+      Number.parseFloat(
+        inclineText.replace(
+          '%',
+          ''
+        )
+      );
+
+
+    if (
+      Number.isFinite(
+        parsed
+      )
+    ) {
+
+      incline =
+        Math.abs(
+          parsed
+        );
+    }
+  }
+
+
+  const pedestrianRoute =
+    highway === 'footway' ||
+    highway === 'pedestrian';
+
+
+  const usableSurface =
+    [
+      'asphalt',
+      'concrete',
+      'paved',
+      'paving_stones',
+      'compacted',
+      'fine_gravel',
+    ].includes(
+      surface ?? ''
+    );
+
+
+  const unsuitableSmoothness =
+    [
+      'bad',
+      'very_bad',
+      'horrible',
+      'very_horrible',
+      'impassable',
+    ].includes(
+      smoothness ?? ''
+    );
+
+
+  const suitableIncline =
+    incline === null ||
+    incline <= 8;
+
+
+  if (
+    pedestrianRoute &&
+    usableSurface &&
+    !unsuitableSmoothness &&
+    suitableIncline
+  ) {
+
+    return (
+      'Mapped accessible candidate: paved or compact pedestrian route. Verify posted accessibility and current trail conditions.'
+    );
+  }
+
+
+  return undefined;
+}
+
+
+// Purpose:
+// Builds a searchable OpenStreetMap address including the
+// ZIP / postal code when the provider supplies one.
+function osmAddress(
+  tags: Record<string, string>,
+) {
+
+  const street =
+    [
+      tags['addr:housenumber'],
+      tags['addr:street'],
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+
+  const city =
+    tags['addr:city'] ||
+    tags['addr:town'] ||
+    tags['addr:village'] ||
+    tags['addr:place'];
+
+
+  const region =
+    tags['addr:state'];
+
+
+  const postalCode =
+    tags['addr:postcode'];
+
+
+  return (
+    [
+      street,
+      city,
+      region,
+      postalCode,
+    ]
+      .filter(Boolean)
+      .join(', ') ||
+    undefined
+  );
 }
 
 // Purpose: Normalizes overpass places.
@@ -161,7 +648,6 @@ export function normalizeOverpassPlaces(elements: OverpassElement[], origin: Coo
     const id = `${element.type}:${element.id}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    const wheelchair = readString(tags, 'wheelchair');
     trails.push({
       id,
       name,
@@ -171,7 +657,10 @@ export function normalizeOverpassPlaces(elements: OverpassElement[], origin: Coo
       category: categoryFromOsmTags(tags),
       address: osmAddress(tags),
       description: readString(tags, 'description'),
-      accessibility: wheelchair ? `Wheelchair access: ${wheelchair}` : undefined,
+      accessibility:
+        accessibilityFromMappedData(
+          tags
+        ),
       difficulty: difficultyFrom(tags),
       source: 'openstreetmap',
     });
@@ -219,7 +708,11 @@ export function normalizeGeoapifyPlaces(features: GeoapifyPlaceFeature[], origin
       category: categoryFrom(categories, raw),
       address,
       description: properties.description ?? readString(raw, 'description'),
-      accessibility: wheelchair ? `Wheelchair access: ${wheelchair}` : undefined,
+      accessibility:
+        accessibilityFromMappedData(
+          raw,
+          wheelchair
+        ),
       difficulty: difficultyFrom(raw),
       source: 'geoapify',
     });

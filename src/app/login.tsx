@@ -446,7 +446,13 @@ export default function LoginScreen() {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity onPress={() => router.push('/Signup')}>
+        <TouchableOpacity
+          onPress={() =>
+            router.push(
+              '/onboarding_user_info'
+            )
+          }
+        >
           <Text style={styles.createText}>Don&apos;t have an account? <Text style={styles.createAccent}>Create Account</Text></Text>
         </TouchableOpacity>
       </View>

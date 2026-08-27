@@ -47,7 +47,7 @@ import { useAuth } from "../../context/auth";
 
 type SensorAvailability = "checking" | "available" | "unavailable";
 type ActivityPermissionStatus = "undetermined" | "granted" | "denied";
-type PedometerModule = typeof import("expo-sensors/build/Pedometer");
+type PedometerModule = typeof import("expo-sensors")["Pedometer"];
 type PedometerSubscription = ReturnType<PedometerModule["watchStepCount"]>;
 
 type DailyActivityValue = {
@@ -110,33 +110,21 @@ const PROGRESS_REFRESH_MAX_RETRY_MS = 5 * 60_000;
  * not contain ExponentPedometer. Returning null lets every route keep rendering
  * while the activity card explains that step tracking is unavailable.
  */
-// Purpose: Loads pedometer module.
+// Purpose: Loads Expo's native pedometer without crashing screens if it is unavailable.
 function loadPedometerModule() {
-  pedometerModulePromise ??= import("expo-sensors/build/Pedometer")
-    .then((loadedModule) => {
-      // Metro can wrap a dynamically imported CommonJS module in `default`.
-      // Normalize both shapes before the provider calls the sensor API.
-      const moduleEnvelope = loadedModule as PedometerModule & {
-        default?: PedometerModule;
-        Pedometer?: PedometerModule;
-      };
-      const candidate =
-        typeof moduleEnvelope.isAvailableAsync === "function"
-          ? moduleEnvelope
-          : (moduleEnvelope.default ?? moduleEnvelope.Pedometer ?? null);
-      return candidate && typeof candidate.isAvailableAsync === "function"
-        ? candidate
-        : null;
-    })
+  pedometerModulePromise ??= import("expo-sensors")
+    .then((loadedModule) => loadedModule.Pedometer ?? null)
     .catch((error) => {
       if (__DEV__) {
         console.warn(
-          "[Daily activity] This development build does not include ExponentPedometer.",
+          "[Daily activity] Expo Pedometer module could not load.",
           error,
         );
       }
+
       return null;
     });
+
   return pedometerModulePromise;
 }
 
@@ -475,25 +463,59 @@ export function ActivityProgressProvider({
         saveMissionEligibleSteps(userId, localDate, eligibleBase, startedAt),
       ]);
 
+      const sessionStartedAt = new Date();
       let previousSessionSteps = 0;
-      pedometerSubscriptionRef.current = Pedometer.watchStepCount((result) => {
+
+      // Purpose: Applies only new confirmed steps from this Mission Trails session.
+      const applySessionSteps = (rawSessionSteps: number) => {
         if (activeDateRef.current !== getLocalDateKey()) return;
-        const sessionSteps = Math.max(0, result.steps);
-        const stepDelta = Math.max(0, sessionSteps - previousSessionSteps);
-        previousSessionSteps = sessionSteps;
-        const nextSteps = clampDailySteps(sessionBaseSteps + sessionSteps);
+
+        const reportedSessionSteps = clampDailySteps(rawSessionSteps);
+
+        // Never let two sensor sources make the counter move backwards.
+        const confirmedSessionSteps = Math.max(
+          previousSessionSteps,
+          reportedSessionSteps,
+        );
+
+        const stepDelta = Math.max(
+          0,
+          confirmedSessionSteps - previousSessionSteps,
+        );
+
+        // No new movement means there is nothing to save.
+        if (stepDelta <= 0) return;
+
+        previousSessionSteps = confirmedSessionSteps;
+
+        const nextSteps = clampDailySteps(
+          sessionBaseSteps + confirmedSessionSteps,
+        );
+
         const updatedAt = new Date().toISOString();
+
         setTodaySteps(nextSteps);
         setLastUpdatedAt(updatedAt);
-        void saveDailySteps(userId, localDate, nextSteps, updatedAt);
 
-        const activeNavigation = isActiveTrailCurrent(activeTrailRef.current);
+        void saveDailySteps(
+          userId,
+          localDate,
+          nextSteps,
+          updatedAt,
+        );
+
+        const activeNavigation = isActiveTrailCurrent(
+          activeTrailRef.current,
+        );
+
         if (!activeNavigation || isNearDestinationRef.current) {
           const nextMissionSteps = clampDailySteps(
             missionEligibleStepsRef.current + stepDelta,
           );
+
           missionEligibleStepsRef.current = nextMissionSteps;
           setMissionEligibleSteps(nextMissionSteps);
+
           void saveMissionEligibleSteps(
             userId,
             localDate,
@@ -501,7 +523,55 @@ export function ActivityProgressProvider({
             updatedAt,
           );
         }
+      };
+
+      // Purpose: Receives live Core Motion step events while Mission Trails is open.
+      const liveSubscription = Pedometer.watchStepCount((result) => {
+        applySessionSteps(result.steps);
       });
+
+      let historyTimer: ReturnType<typeof setInterval> | null = null;
+      let historyPollingEnabled = true;
+
+      // Purpose: Gives iPhone a backup step source if live pedometer events stall.
+      //
+      // iOS can query Core Motion for steps taken between two dates. We query
+      // only from the moment this Mission Trails session started, so older
+      // iPhone steps are not imported into the app.
+      historyTimer = setInterval(() => {
+        if (!historyPollingEnabled) return;
+
+        void Pedometer.getStepCountAsync(
+          sessionStartedAt,
+          new Date(),
+        )
+          .then((result) => {
+            applySessionSteps(result.steps);
+          })
+          .catch(() => {
+            // getStepCountAsync is iOS-only. Android keeps using the live
+            // listener and disables this fallback after the first rejection.
+            historyPollingEnabled = false;
+
+            if (historyTimer) {
+              clearInterval(historyTimer);
+              historyTimer = null;
+            }
+          });
+      }, 2500);
+
+      // Purpose: Stops both live and backup step tracking together.
+      pedometerSubscriptionRef.current = {
+        remove() {
+          liveSubscription.remove();
+
+          if (historyTimer) {
+            clearInterval(historyTimer);
+            historyTimer = null;
+          }
+        },
+      } as PedometerSubscription;
+
       setIsTracking(true);
     } catch (error) {
       if (__DEV__)
