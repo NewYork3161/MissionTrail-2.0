@@ -43,3 +43,6 @@ example
 # generated native folders
 /ios
 /android
+
+# iOS build files - keep outside GitHub
+*.ipa
