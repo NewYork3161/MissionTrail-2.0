@@ -66,7 +66,7 @@ type FoodShopItem = {
 type FoodShopMap = Record<string, FoodShopItem>;
 
 const companionImage = require('../../assets/images/tabIcons/companion.png');
-const explorerCoinImage = require('../../assets/images/tabIcons/MissionTrailsCoin/ExplorerCoins.png');
+const explorerCoinImage = require('../../assets/images/MissionTrailsCoin/ExplorerCoins.png');
 
 const FOOD_PREVIEWS: FoodPreview[] = [
   // Treats / Happiness

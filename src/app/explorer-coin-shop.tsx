@@ -49,7 +49,7 @@ const EXPLORER_COINS_500 =
 
 const explorerCoinImage =
   require(
-    '../../assets/images/tabIcons/MissionTrailsCoin/ExplorerCoins.png'
+    '../../assets/images/MissionTrailsCoin/ExplorerCoins.png'
   );
 
 

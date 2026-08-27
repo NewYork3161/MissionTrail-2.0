@@ -139,55 +139,55 @@ const auraOptions = [
 const footprintOptions = [
   {
     name: "Aries",
-    source: require("../../assets/images/tabIcons/footprints/aries.png"),
+    source: require("../../assets/images/footprints/aries.png"),
   },
   {
     name: "Cancer",
-    source: require("../../assets/images/tabIcons/footprints/cancer.png"),
+    source: require("../../assets/images/footprints/cancer.png"),
   },
   {
     name: "Capricorn",
-    source: require("../../assets/images/tabIcons/footprints/capricorn.png"),
+    source: require("../../assets/images/footprints/capricorn.png"),
   },
   {
     name: "Gemini",
-    source: require("../../assets/images/tabIcons/footprints/gemini.png"),
+    source: require("../../assets/images/footprints/gemini.png"),
   },
   {
     name: "Leo",
-    source: require("../../assets/images/tabIcons/footprints/leo.png"),
+    source: require("../../assets/images/footprints/leo.png"),
   },
   {
     name: "Pisces",
-    source: require("../../assets/images/tabIcons/footprints/pisces.png"),
+    source: require("../../assets/images/footprints/pisces.png"),
   },
   {
     name: "Sagittarius",
-    source: require("../../assets/images/tabIcons/footprints/sagittarius.png"),
+    source: require("../../assets/images/footprints/sagittarius.png"),
   },
   {
     name: "Scorpion",
-    source: require("../../assets/images/tabIcons/footprints/scorpion.png"),
+    source: require("../../assets/images/footprints/scorpion.png"),
   },
   {
     name: "Taurus",
-    source: require("../../assets/images/tabIcons/footprints/taraus.png"),
+    source: require("../../assets/images/footprints/taraus.png"),
   },
   {
     name: "Virgo",
-    source: require("../../assets/images/tabIcons/footprints/virgo.png"),
+    source: require("../../assets/images/footprints/virgo.png"),
   },
   {
     name: "Libra",
-    source: require("../../assets/images/tabIcons/footprints/libra.png"),
+    source: require("../../assets/images/footprints/libra.png"),
   },
   {
     name: "Aquarius",
-    source: require("../../assets/images/tabIcons/footprints/aquarius.png"),
+    source: require("../../assets/images/footprints/aquarius.png"),
   },
   {
     name: "Footprint",
-    source: require("../../assets/images/tabIcons/footprints/footprints.png"),
+    source: require("../../assets/images/footprints/footprints.png"),
   },
 ] as const;
 
