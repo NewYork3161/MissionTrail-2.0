@@ -17,6 +17,7 @@ import { playEggHatchHaptics } from '@/utils/game-haptics';
 type Props = {
   visible: boolean;
   eggImage?: ImageSourcePropType;
+  companionImage?: ImageSourcePropType;
   eggName: string;
   glowColor: string;
   companionName: string;
@@ -39,6 +40,7 @@ const PARTICLES = [
 export function EggHatchAnimation({
   visible,
   eggImage,
+  companionImage,
   eggName,
   glowColor,
   companionName,
@@ -371,11 +373,19 @@ export function EggHatchAnimation({
                 },
               ]}
             >
-              <Ionicons
-                name="paw"
-                size={86}
-                color={glowColor}
-              />
+              {companionImage ? (
+                <Image
+                  source={companionImage}
+                  resizeMode="contain"
+                  style={styles.companionImage}
+                />
+              ) : (
+                <Ionicons
+                  name="paw"
+                  size={86}
+                  color={glowColor}
+                />
+              )}
             </View>
 
             <Text style={styles.youHatched}>
@@ -545,6 +555,11 @@ const styles = StyleSheet.create({
       width: 0,
       height: 0,
     },
+  },
+
+  companionImage: {
+    width: 150,
+    height: 150,
   },
 
   youHatched: {

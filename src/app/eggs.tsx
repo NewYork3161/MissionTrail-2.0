@@ -22,6 +22,15 @@ import {
   isEggReadyToHatch,
 } from '../data/egg-hatching';
 
+// Purpose: Temporary 2D artwork used until the 3D companion models are ready.
+const DEMO_COMPANION_IMAGE =
+  require('../../assets/images/tabIcons/companion.png');
+
+// Purpose: Allows the presentation to demonstrate a complete hatch
+// without requiring the presenter to walk the full egg distance first.
+// Change this to false after the presentation.
+const PRESENTATION_DEMO_MODE = true;
+
 // Purpose: Renders the eggs screen interface.
 export default function EggsScreen() {
   const router = useRouter();
@@ -70,19 +79,29 @@ export default function EggsScreen() {
     );
   }
 
+  // Purpose: Uses completed distance during presentation mode
+  // so the full hatch experience can be demonstrated indoors.
+  const effectiveDistanceWalkedMiles =
+    PRESENTATION_DEMO_MODE
+      ? Math.max(
+          distanceWalkedMiles,
+          selectedEgg.hatchDistanceMiles
+        )
+      : distanceWalkedMiles;
+
   const progress = getEggHatchPercentage(
     selectedEgg.id,
-    distanceWalkedMiles
+    effectiveDistanceWalkedMiles
   );
 
   const milesRemaining = getEggMilesRemaining(
     selectedEgg.id,
-    distanceWalkedMiles
+    effectiveDistanceWalkedMiles
   );
 
   const ready = isEggReadyToHatch(
     selectedEgg.id,
-    distanceWalkedMiles
+    effectiveDistanceWalkedMiles
   );
 
   // Purpose: Handles hatch egg.
@@ -108,12 +127,25 @@ export default function EggsScreen() {
 
   // Purpose: Handles claim companion.
   const handleClaimCompanion = () => {
+    if (!hatchedCompanion) {
+      return;
+    }
+
+    const companionId =
+      hatchedCompanion.id;
+
     setIsHatching(false);
     setHatchedCompanion(null);
 
-    // NEXT STEP:
-    // Save the companion into the user's
-    // permanent Supabase companion inventory.
+    // Purpose: Sends the temporary hatched companion
+    // to the Companion screen for the presentation.
+    // Permanent Supabase ownership can replace this later.
+    router.push({
+      pathname: '/companion',
+      params: {
+        demoCompanionId: companionId,
+      },
+    });
   };
 
   return (
@@ -204,7 +236,7 @@ export default function EggsScreen() {
 
           <View style={styles.distanceRow}>
             <Text style={styles.distanceText}>
-              {distanceWalkedMiles.toFixed(
+              {effectiveDistanceWalkedMiles.toFixed(
                 2
               )}{' '}
               mi
@@ -249,6 +281,7 @@ export default function EggsScreen() {
           </View>
 
           <TouchableOpacity
+            onPress={handleHatchEgg}
             disabled={!ready}
             style={[
               styles.hatchButton,
@@ -308,7 +341,7 @@ export default function EggsScreen() {
             const eggProgress =
               getEggHatchPercentage(
                 egg.id,
-                distanceWalkedMiles
+                effectiveDistanceWalkedMiles
               );
 
             return (
@@ -418,6 +451,7 @@ export default function EggsScreen() {
           glowColor={selectedEgg.glowColor}
           companionName={hatchedCompanion.name}
           companionRarity={hatchedCompanion.rarity}
+          companionImage={DEMO_COMPANION_IMAGE}
           onClose={handleClaimCompanion}
         />
       )}

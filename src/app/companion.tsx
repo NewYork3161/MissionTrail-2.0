@@ -1,6 +1,7 @@
 import { router as expoRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useLocalSearchParams } from 'expo-router';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
@@ -392,6 +393,19 @@ const PLAY_GAMES: {
 export default function CompanionScreen() {
   const safeArea = useSafeAreaInsets();
 
+  // Purpose: Receives the temporary companion from
+  // the Egg Hatch presentation demo.
+  const { demoCompanionId } =
+    useLocalSearchParams<{
+      demoCompanionId?: string | string[];
+    }>();
+
+  const normalizedDemoCompanionId =
+    Array.isArray(demoCompanionId)
+      ? demoCompanionId[0]
+      : demoCompanionId;
+
+
   const {
     progress,
     isLoading,
@@ -425,38 +439,116 @@ export default function CompanionScreen() {
 
   const petScale = useRef(new Animated.Value(1)).current;
 
+  // Purpose: Temporary stats used only when the
+  // presentation companion has not been saved yet.
+  const [demoBondPercent, setDemoBondPercent] =
+    useState(72);
+
+  const [demoEnergyPercent, setDemoEnergyPercent] =
+    useState(84);
+
+
   const companion = progress?.companion;
 
+  // Purpose: Finds the temporary hatched companion
+  // when no permanent active companion exists yet.
+  const demoCompanionDefinition =
+    normalizedDemoCompanionId
+      ? getCompanionById(
+          normalizedDemoCompanionId
+        )
+      : undefined;
+
+  const effectiveCompanionId =
+    companion?.companionId ??
+    demoCompanionDefinition?.id;
+
+  const isPresentationDemo =
+    Boolean(
+      !companion?.companionId &&
+      demoCompanionDefinition
+    );
+
   const companionName =
-    formatCompanionName(companion?.companionId) ??
+    formatCompanionName(
+      effectiveCompanionId
+    ) ??
+    demoCompanionDefinition?.name ??
     'Your Companion';
 
   const companionDefinition =
-    companion?.companionId
-      ? getCompanionById(companion.companionId)
+    effectiveCompanionId
+      ? getCompanionById(
+          effectiveCompanionId
+        )
       : undefined;
 
   const bondPercent =
-    clampPercent(companion?.bondPercent ?? 0);
-
-  const energyPercent =
-    getEnergyPercent(
-      companion?.energy ?? 0,
-      companion?.maximumEnergy ?? 100,
+    clampPercent(
+      companion?.bondPercent ??
+        (
+          isPresentationDemo
+            ? demoBondPercent
+            : 0
+        )
     );
 
-  // Purpose: Keeps every care stat safely between 0 and 100.
+  const energyPercent =
+    isPresentationDemo
+      ? demoEnergyPercent
+      : getEnergyPercent(
+          companion?.energy ?? 0,
+          companion?.maximumEnergy ?? 100,
+        );
+
+  // Purpose: Temporary care stats for the 2D presentation
+  // companion. Real backend values can replace these later.
+  const companionCareData =
+    companion as unknown as
+      | {
+          hungerPercent?: number;
+          happinessPercent?: number;
+          healthPercent?: number;
+          careStreak?: number;
+        }
+      | undefined;
+
   const hungerPercent =
-    clampPercent(companion?.hunger ?? 0);
+    isPresentationDemo
+      ? 78
+      : clampPercent(
+          Number(
+            companionCareData?.hungerPercent ?? 0
+          )
+        );
 
   const happinessPercent =
-    clampPercent(companion?.happiness ?? 0);
+    isPresentationDemo
+      ? 86
+      : clampPercent(
+          Number(
+            companionCareData?.happinessPercent ?? 0
+          )
+        );
 
   const healthPercent =
-    clampPercent(companion?.health ?? 0);
+    isPresentationDemo
+      ? 92
+      : clampPercent(
+          Number(
+            companionCareData?.healthPercent ?? 0
+          )
+        );
 
   const careStreak =
-    Math.max(0, companion?.careStreak ?? 0);
+    isPresentationDemo
+      ? 3
+      : Math.max(
+          0,
+          Number(
+            companionCareData?.careStreak ?? 0
+          )
+        );
 
   const playerLevel =
     getPlayerLevelProgress(progress?.totalXp ?? 0);
@@ -480,6 +572,19 @@ export default function CompanionScreen() {
   function petCompanion() {
     setPetMessage('Your companion loved that 💜');
 
+    // Purpose: Gives visible Bond feedback during
+    // the temporary presentation demo.
+    if (isPresentationDemo) {
+      setDemoBondPercent(
+        (current) =>
+          Math.min(
+            100,
+            current + 1
+          )
+      );
+    }
+
+
     Animated.sequence([
       Animated.spring(petScale, {
         toValue: 1.14,
@@ -502,6 +607,20 @@ export default function CompanionScreen() {
 
   async function loadFoodInventory() {
     setFoodInventoryLoading(true);
+
+    // Purpose: Provides temporary presentation food
+    // without changing the real Supabase inventory.
+    if (isPresentationDemo) {
+      setFoodInventory({
+        'cosmic-berry': 3,
+        'aurora-pudding': 2,
+        'meteor-burger': 1,
+      });
+
+      setFoodInventoryLoading(false);
+      return;
+    }
+
 
     try {
       const { data, error } = await supabase
@@ -643,13 +762,23 @@ export default function CompanionScreen() {
   }
 
   useEffect(() => {
-    if (view === 'feed') {
-      void Promise.all([
-        loadFoodInventory(),
-        loadFoodShop(),
-      ]);
+    if (view !== 'feed') {
+      return;
     }
-  }, [view]);
+
+    // Purpose: Demo companion uses local food.
+    // Real companions continue using Supabase.
+    if (isPresentationDemo) {
+      setFoodPanel('inventory');
+      void loadFoodInventory();
+      return;
+    }
+
+    void Promise.all([
+      loadFoodInventory(),
+      loadFoodShop(),
+    ]);
+  }, [view, isPresentationDemo]);
 
   async function purchaseFood(
     foodId: string,
@@ -813,6 +942,92 @@ export default function CompanionScreen() {
       return;
     }
 
+    // Purpose: Simulates companion feeding only for
+    // presentation mode. Real companions still use
+    // server_consume_companion_food.
+    if (isPresentationDemo) {
+      const currentQuantity =
+        foodInventory[selectedFoodId] ?? 0;
+
+      if (currentQuantity <= 0) {
+        setFeedMessage(
+          `${selectedFood.name} is out of stock.`
+        );
+        return;
+      }
+
+      setIsFeeding(true);
+
+      setFoodInventory(
+        (current) => ({
+          ...current,
+          [selectedFoodId]:
+            Math.max(
+              0,
+              (
+                current[selectedFoodId] ??
+                0
+              ) - 1
+            ),
+        })
+      );
+
+      setDemoBondPercent(
+        (current) =>
+          Math.min(
+            100,
+            current + 2
+          )
+      );
+
+      setDemoEnergyPercent(
+        (current) =>
+          Math.min(
+            100,
+            current +
+              Math.max(
+                3,
+                Math.round(
+                  selectedFood.hp / 3
+                )
+              )
+          )
+      );
+
+      setFeedMessage(
+        `${selectedFood.name} fed! +${selectedFood.hp} HP • +${selectedFood.xp} XP • Bond +2 💜`
+      );
+
+      Animated.sequence([
+        Animated.spring(
+          petScale,
+          {
+            toValue: 1.18,
+            useNativeDriver: true,
+            speed: 24,
+            bounciness: 14,
+          }
+        ),
+
+        Animated.spring(
+          petScale,
+          {
+            toValue: 1,
+            useNativeDriver: true,
+            speed: 20,
+            bounciness: 8,
+          }
+        ),
+      ]).start();
+
+      setTimeout(() => {
+        setIsFeeding(false);
+      }, 500);
+
+      return;
+    }
+
+
     const quantity =
       foodInventory[selectedFoodId] ?? 0;
 
@@ -964,7 +1179,7 @@ export default function CompanionScreen() {
             companionName={companionName}
             companionDefinition={companionDefinition}
             isLoading={isLoading}
-            hasCompanion={Boolean(companion?.companionId)}
+            hasCompanion={Boolean(effectiveCompanionId)}
             bondPercent={bondPercent}
             bondTier={companion?.bondTier ?? 1}
             energyPercent={energyPercent}
