@@ -9,18 +9,23 @@ import {
   getTrails,
   setTrailFavorite,
 } from '@/services/trail-data-service';
+import {
+  geocodeTrailLocation,
+  TrailDiscoveryError,
+} from '@/services/trail-discovery-service';
 import type { Trail, TrailFilters, TrailSearchCoordinate } from '@/types/trails';
 import { calculateDistanceMeters } from '@/utils/distance';
 import { EMPTY_TRAIL_FILTERS, filterTrails } from '@/utils/trail-filters';
 
 const SEARCH_AREA_MOVEMENT_METERS = 250;
+const CATALOG_REFRESH_MOVEMENT_METERS = 500;
 const CURRENT_LOCATION_TIMEOUT_MS = 10_000;
 const LAST_KNOWN_MAX_AGE_MS = 5 * 60 * 1_000;
 const LAST_KNOWN_REQUIRED_ACCURACY_METERS = 1_000;
-const SAN_FRANCISCO_PREVIEW = { latitude: 37.7749, longitude: -122.4194 };
 
 export type TrailLocationStatus =
   | 'checking'
+  | 'not_requested'
   | 'granted'
   | 'denied'
   | 'services_off'
@@ -29,10 +34,11 @@ export type TrailLocationStatus =
 
 export type TrailLocationResult =
   | { kind: 'located'; coordinate: TrailSearchCoordinate; isPhysicalDevice: boolean }
-  | { kind: 'simulator_fallback'; coordinate: TrailSearchCoordinate }
+  | { kind: 'simulator_fallback' }
   | { kind: 'denied' | 'services_off' | 'unavailable' };
 
 // Makes sure a GPS object contains finite coordinates inside the Earth's bounds.
+// Purpose: Implements the read valid coordinate operation.
 function readValidCoordinate(location: Location.LocationObject | null): TrailSearchCoordinate | null {
   if (!location) return null;
   const { latitude, longitude } = location.coords;
@@ -42,6 +48,7 @@ function readValidCoordinate(location: Location.LocationObject | null): TrailSea
 }
 
 // Stops the screen from waiting forever when the operating system cannot provide GPS.
+// Purpose: Returns balanced position with timeout.
 async function getBalancedPositionWithTimeout(): Promise<Location.LocationObject | null> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -57,69 +64,167 @@ async function getBalancedPositionWithTimeout(): Promise<Location.LocationObject
 }
 
 // Prints technical details only during development, keeping user messages simple.
+// Purpose: Implements the log location problem operation.
 function logLocationProblem(message: string, error?: unknown) {
   if (__DEV__) console.warn(`[Trails location] ${message}`, error ?? '');
 }
 
+// Purpose: Implements the log trail debug operation.
+function logTrailDebug(message: string, details?: unknown) {
+  if (__DEV__) console.info(`[Trails discovery] ${message}`, details ?? '');
+}
+
+// Purpose: Provides the nearby trails React hook behavior.
 export function useNearbyTrails() {
   const [userLocation, setUserLocation] = useState<TrailSearchCoordinate | null>(null);
   const [locationCenter, setLocationCenter] = useState<TrailSearchCoordinate | null>(null);
-  const [searchCenter, setSearchCenter] = useState<TrailSearchCoordinate>(SAN_FRANCISCO_PREVIEW);
-  const [mapCenter, setMapCenter] = useState<TrailSearchCoordinate>(SAN_FRANCISCO_PREVIEW);
+  const [searchCenter, setSearchCenter] = useState<TrailSearchCoordinate | null>(null);
+  const [mapCenter, setMapCenter] = useState<TrailSearchCoordinate | null>(null);
   const [allTrails, setAllTrails] = useState<Trail[]>([]);
   const [meetups, setMeetups] = useState<Awaited<ReturnType<typeof getTrailMeetups>>>([]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
+  const [favoriteBusyIds, setFavoriteBusyIds] = useState<string[]>([]);
   const [filters, setFilters] = useState<TrailFilters>(EMPTY_TRAIL_FILTERS);
-  const [query, setQuery] = useState('');
+  const [query, setQueryValue] = useState('');
+  const [filterQuery, setFilterQuery] = useState('');
+  const [isSearchingQuery, setIsSearchingQuery] = useState(false);
+  const [isLocationSearchActive, setIsLocationSearchActive] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [locationStatus, setLocationStatus] = useState<TrailLocationStatus>('checking');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<TrailLocationStatus>('not_requested');
   const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
   const locationRequestRef = useRef<Promise<TrailLocationResult> | null>(null);
   const locationSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const locationSubscriptionStartingRef = useRef(false);
+  const catalogRequestIdRef = useRef(0);
+  const searchCenterRef = useRef<TrailSearchCoordinate | null>(null);
 
-  // Loads trail cards for one coordinate while ignoring late work after unmount.
-  const loadCatalog = useCallback(async (center?: TrailSearchCoordinate | null) => {
+  // Purpose:
+  // Prevents phone GPS updates from immediately replacing
+  // a city or ZIP search chosen by the user.
+  const locationSearchActiveRef =
+    useRef(false);
+  const favoriteMutationIdsRef = useRef(new Set<string>());
+
+  // Loads trail cards for one coordinate and ignores responses from stale searches.
+  // Purpose: Loads catalog.
+  const loadCatalog = useCallback(async (
+    center?: TrailSearchCoordinate | null,
+    options: { forceRefresh?: boolean } = {},
+  ) => {
+    const requestId = ++catalogRequestIdRef.current;
+    if (!center) {
+      if (!mountedRef.current) return;
+      setAllTrails([]);
+      setError(null);
+      setMeetups(await getTrailMeetups());
+      setFavoriteIds(await getFavoriteTrailIds());
+      setIsLoading(false);
+      setIsRefreshing(false);
+      logTrailDebug('No fallback/mock catalog used because no device coordinate is available.');
+      return;
+    }
+
+    logTrailDebug('Coordinates sent to nearby trail search.', {
+      latitude: center.latitude,
+      longitude: center.longitude,
+      radiusMiles: 25,
+      forceRefresh: Boolean(options.forceRefresh),
+    });
     try {
       const [trails, trailMeetups, favorites] = await Promise.all([
-        getTrails(center),
+        getTrails(center, options),
         getTrailMeetups(),
         getFavoriteTrailIds(),
       ]);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || requestId !== catalogRequestIdRef.current) return;
       setAllTrails(trails);
       setMeetups(trailMeetups);
       setFavoriteIds(favorites);
-      if (center) {
-        setSearchCenter(center);
-        setMapCenter(center);
-      }
+      searchCenterRef.current = center;
+      setSearchCenter(center);
+      setMapCenter(center);
       setError(null);
+      logTrailDebug('Nearby trail search completed.', {
+        resultCount: trails.length,
+        closestDistanceMiles: trails[0]?.distanceMiles ?? null,
+        fallbackOrMockUsed: false,
+      });
     } catch (catalogError) {
       logLocationProblem('Trail catalog loading failed.', catalogError);
-      if (mountedRef.current) setError('Trail data could not be loaded. Please try again.');
+      if (mountedRef.current && requestId === catalogRequestIdRef.current) {
+        setError(
+          catalogError instanceof TrailDiscoveryError
+            ? catalogError.message
+            : 'The nearby trail service is temporarily unavailable. Try again shortly.',
+        );
+      }
     } finally {
-      if (mountedRef.current) setIsLoading(false);
+      if (mountedRef.current && requestId === catalogRequestIdRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, []);
 
-  // Uses a temporary map center for simulator previews without calling it real GPS.
+  // Purpose:
+  // Reloads only Meetup records from Supabase without
+  // re-running GPS or trail discovery.
+  //
+  // This lets Meetups Today update immediately after the
+  // user creates a Meetup and returns from Trail Details.
+  const refreshMeetups =
+    useCallback(
+      async () => {
+
+        try {
+
+          const trailMeetups =
+            await getTrailMeetups();
+
+
+          if (
+            mountedRef.current
+          ) {
+
+            setMeetups(
+              trailMeetups
+            );
+          }
+
+        } catch (
+          meetupError
+        ) {
+
+          logLocationProblem(
+            'Meetup refresh failed.',
+            meetupError
+          );
+        }
+      },
+      []
+    );
+
+
+  // Gives simulators a clear no-location state without inventing GPS coordinates.
+  // Purpose: Implements the activate simulator preview operation.
   const activateSimulatorPreview = useCallback(async (): Promise<TrailLocationResult> => {
     // Development preview only: this coordinate is never saved as the user's location.
     if (!__DEV__ || Platform.OS !== 'ios' || Device.isDevice) return { kind: 'unavailable' };
     if (mountedRef.current) {
       setUserLocation(null);
-      setLocationCenter(SAN_FRANCISCO_PREVIEW);
+      setLocationCenter(null);
       setLocationStatus('simulator_fallback');
       setLocationWarning('Simulator location unavailable. Choose a simulated location from Xcode Features > Location.');
     }
-    await loadCatalog(SAN_FRANCISCO_PREVIEW);
-    return { kind: 'simulator_fallback', coordinate: SAN_FRANCISCO_PREVIEW };
+    await loadCatalog(null);
+    return { kind: 'simulator_fallback' };
   }, [loadCatalog]);
 
   // Keeps the foreground map pin current after the first GPS fix is found.
+  // Purpose: Starts live location updates.
   const startLiveLocationUpdates = useCallback(async () => {
     if (locationSubscriptionRef.current || locationSubscriptionStartingRef.current) return;
     locationSubscriptionStartingRef.current = true;
@@ -134,10 +239,30 @@ export function useNearbyTrails() {
           const coordinate = readValidCoordinate(nextLocation);
           if (!coordinate || !mountedRef.current) return;
 
-          // This only updates the live pin. Trail API searches remain manual.
           setUserLocation(coordinate);
           setLocationStatus('granted');
           setLocationWarning(null);
+          logTrailDebug('Foreground device coordinate updated.', coordinate);
+
+          // Purpose:
+          // Keep updating the real blue-dot location, but do not
+          // replace a catalog the user intentionally searched for.
+          if (
+            locationSearchActiveRef.current
+          ) {
+            return;
+          }
+
+          if (
+            !searchCenterRef.current
+            || calculateDistanceMeters(coordinate, searchCenterRef.current)
+              >= CATALOG_REFRESH_MOVEMENT_METERS
+          ) {
+            // Reserve this coordinate before starting the async request so a
+            // burst of watch updates cannot issue duplicate nearby searches.
+            searchCenterRef.current = coordinate;
+            void loadCatalog(coordinate);
+          }
         },
       );
       if (!mountedRef.current) {
@@ -150,33 +275,72 @@ export function useNearbyTrails() {
     } finally {
       locationSubscriptionStartingRef.current = false;
     }
-  }, []);
+  }, [loadCatalog]);
 
   // Checks permission once, uses cached GPS immediately, then tries for a fresh fix.
-  const runLocationRequest = useCallback(async (): Promise<TrailLocationResult> => {
+  // Purpose: Implements the run location request operation.
+  const runLocationRequest = useCallback(async (forceRefresh = false): Promise<TrailLocationResult> => {
     const isIosSimulator = Platform.OS === 'ios' && !Device.isDevice;
+
+    // Purpose:
+    // Choosing the real-location action exits city / ZIP browsing.
+    locationSearchActiveRef.current =
+      false;
+
     if (mountedRef.current) {
-      setIsLoading(true);
+      setIsLocationSearchActive(
+        false
+      );
+
+      setQueryValue(
+        ''
+      );
+
+      setFilterQuery(
+        ''
+      );
+    }
+    if (mountedRef.current) {
+      setIsRefreshing(true);
       setLocationStatus('checking');
       setLocationWarning(null);
+      setError(null);
     }
 
     try {
       const servicesEnabled = await Location.hasServicesEnabledAsync();
+      logTrailDebug('Location services status checked.', { servicesEnabled });
       if (!servicesEnabled) {
         if (isIosSimulator) return activateSimulatorPreview();
-        if (mountedRef.current) setLocationStatus('services_off');
+        if (mountedRef.current) {
+          setLocationStatus('services_off');
+          setLocationWarning('Turn on Location Services to explore trails and parks near you.');
+        }
         await loadCatalog(null);
         return { kind: 'services_off' };
       }
 
       let permission = await Location.getForegroundPermissionsAsync();
-      if (permission.status === Location.PermissionStatus.UNDETERMINED && permission.canAskAgain) {
+      logTrailDebug('Foreground location permission status.', {
+        status: permission.status,
+        canAskAgain: permission.canAskAgain,
+      });
+      if (
+        permission.status !== Location.PermissionStatus.GRANTED
+        && permission.canAskAgain
+      ) {
         permission = await Location.requestForegroundPermissionsAsync();
+        logTrailDebug('Foreground location permission request completed.', {
+          status: permission.status,
+          canAskAgain: permission.canAskAgain,
+        });
       }
       if (permission.status !== Location.PermissionStatus.GRANTED) {
         if (isIosSimulator) return activateSimulatorPreview();
-        if (mountedRef.current) setLocationStatus('denied');
+        if (mountedRef.current) {
+          setLocationStatus('denied');
+          setLocationWarning('Mission Trails needs location access to find trails and parks near you.');
+        }
         await loadCatalog(null);
         return { kind: 'denied' };
       }
@@ -189,6 +353,7 @@ export function useNearbyTrails() {
         });
         lastKnownCoordinate = readValidCoordinate(lastKnown);
         if (lastKnownCoordinate && mountedRef.current) {
+          logTrailDebug('Recent cached device coordinate accepted.', lastKnownCoordinate);
           setLocationCenter(lastKnownCoordinate);
           // A simulator cache may be stale, so only a fresh simulator fix becomes its blue pin.
           if (!isIosSimulator) {
@@ -210,7 +375,7 @@ export function useNearbyTrails() {
         logLocationProblem('No valid location arrived before the timeout.');
         if (mountedRef.current) {
           setLocationStatus('unavailable');
-          setLocationWarning('GPS is temporarily unavailable. Tap the location button to try again.');
+          setLocationWarning('We couldn’t determine your location. Move to an open area and try again.');
         }
         await loadCatalog(null);
         return { kind: 'unavailable' };
@@ -222,7 +387,8 @@ export function useNearbyTrails() {
         setLocationStatus('granted');
         setLocationWarning(null);
       }
-      await loadCatalog(coordinate);
+      logTrailDebug('Current device coordinate accepted.', coordinate);
+      await loadCatalog(coordinate, { forceRefresh });
       await startLiveLocationUpdates();
       return { kind: 'located', coordinate, isPhysicalDevice: Device.isDevice };
     } catch (locationError) {
@@ -230,19 +396,23 @@ export function useNearbyTrails() {
       if (isIosSimulator) return activateSimulatorPreview();
       if (mountedRef.current) {
         setLocationStatus('unavailable');
-        setLocationWarning('GPS is temporarily unavailable. Tap the location button to try again.');
+        setLocationWarning('We couldn’t determine your location. Move to an open area and try again.');
       }
       await loadCatalog(null);
       return { kind: 'unavailable' };
     } finally {
-      if (mountedRef.current) setIsLoading(false);
+      if (mountedRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [activateSimulatorPreview, loadCatalog, startLiveLocationUpdates]);
 
   // Shares one request promise so fast repeated taps cannot start overlapping GPS work.
-  const refresh = useCallback((): Promise<TrailLocationResult> => {
+  // Purpose: Implements the refresh operation.
+  const refresh = useCallback((forceRefresh = false): Promise<TrailLocationResult> => {
     if (locationRequestRef.current) return locationRequestRef.current;
-    const request = runLocationRequest().finally(() => {
+    const request = runLocationRequest(forceRefresh).finally(() => {
       if (locationRequestRef.current === request) locationRequestRef.current = null;
     });
     locationRequestRef.current = request;
@@ -259,9 +429,271 @@ export function useNearbyTrails() {
     };
   }, [refresh]);
 
+  // Purpose:
+  // Updates the visible search text and immediately filters
+  // the currently loaded catalog by name, city, or address.
+  const setQuery = useCallback(
+    (value: string) => {
+
+      setQueryValue(
+        value
+      );
+
+
+      // A partial ZIP should stay visible while the user types
+      // instead of temporarily deleting the whole trail list.
+      if (
+        /^\d{1,5}$/.test(
+          value.trim()
+        )
+      ) {
+
+        setFilterQuery(
+          ''
+        );
+
+        return;
+      }
+
+
+      setFilterQuery(
+        value
+      );
+    },
+    []
+  );
+
+
+  // Purpose:
+  // Searches locally by trail name first, then geocodes
+  // city names and ZIP codes and loads trails around them.
+  const searchQuery = useCallback(
+    async () => {
+
+      const searchText =
+        query.trim();
+
+
+      if (!searchText) {
+
+        setFilterQuery(
+          ''
+        );
+
+        return;
+      }
+
+
+      const isZipCode =
+        /^\d{5}(?:-\d{4})?$/.test(
+          searchText
+        );
+
+
+      // Purpose:
+      // Trail and park names already in the loaded catalog
+      // should filter immediately without changing location.
+      const localMatches =
+        filterTrails(
+          allTrails,
+          EMPTY_TRAIL_FILTERS,
+          meetups,
+          searchText
+        );
+
+
+      if (
+        !isZipCode &&
+        localMatches.length >
+          0
+      ) {
+
+        locationSearchActiveRef.current =
+          false;
+
+        setIsLocationSearchActive(
+          false
+        );
+
+        setFilterQuery(
+          searchText
+        );
+
+        setError(
+          null
+        );
+
+        return;
+      }
+
+
+      if (mountedRef.current) {
+
+        setIsSearchingQuery(
+          true
+        );
+
+        setError(
+          null
+        );
+      }
+
+
+      try {
+
+        // Purpose:
+        // ZIP and city searches use Mission Trails'
+        // server-side geocoder instead of the phone's
+        // native geocoder.
+        const geocodeText =
+          isZipCode
+            ? `${searchText}, United States`
+            : searchText;
+
+
+        const match =
+          await geocodeTrailLocation(
+            geocodeText
+          );
+
+
+        if (!match) {
+
+          if (mountedRef.current) {
+
+            setError(
+              `We couldn't find "${searchText}". Try a city, ZIP code, park, or trail name.`
+            );
+          }
+
+          return;
+        }
+
+
+        const center:
+          TrailSearchCoordinate = {
+            latitude:
+              match.latitude,
+
+            longitude:
+              match.longitude,
+          };
+
+
+        locationSearchActiveRef.current =
+          true;
+
+
+        if (mountedRef.current) {
+
+          setIsLocationSearchActive(
+            true
+          );
+
+
+          // Purpose:
+          // The location text identifies the search center.
+          // It should not also filter trail names afterward.
+          setFilterQuery(
+            ''
+          );
+
+
+          // Purpose:
+          // A new location search begins with the full
+          // catalog instead of carrying a previous filter.
+          setFilters({
+            selected: [],
+          });
+
+
+          setIsRefreshing(
+            true
+          );
+        }
+
+
+        logTrailDebug(
+          'City / ZIP search resolved.',
+          {
+            query:
+              searchText,
+
+            latitude:
+              center.latitude,
+
+            longitude:
+              center.longitude,
+          }
+        );
+
+
+        await loadCatalog(
+          center,
+          {
+            forceRefresh:
+              true,
+          }
+        );
+
+      } catch (searchError) {
+
+        logLocationProblem(
+          'City / ZIP geocoding failed.',
+          searchError
+        );
+
+
+        if (mountedRef.current) {
+
+          setError(
+            'That location could not be searched right now. Try the ZIP code or city again.'
+          );
+        }
+
+      } finally {
+
+        if (mountedRef.current) {
+
+          setIsSearchingQuery(
+            false
+          );
+
+          setIsRefreshing(
+            false
+          );
+        }
+      }
+    },
+    [
+      allTrails,
+      loadCatalog,
+      meetups,
+      query,
+    ]
+  );
+
+
   const trails = useMemo(
-    () => filterTrails(allTrails, filters, meetups, query),
-    [allTrails, filters, meetups, query],
+    () => {
+
+      const filteredTrails =
+        filterTrails(
+          allTrails,
+          filters,
+          meetups,
+          query
+        );
+
+
+      return filteredTrails;
+    },
+    [
+      allTrails,
+      filters,
+      meetups,
+      query,
+    ],
   );
 
   const meetupCounts = useMemo(() => meetups.reduce<Record<string, number>>((counts, meetup) => {
@@ -269,18 +701,48 @@ export function useNearbyTrails() {
     return counts;
   }, {}), [meetups]);
 
-  const hasPendingAreaSearch = calculateDistanceMeters(mapCenter, searchCenter) >= SEARCH_AREA_MOVEMENT_METERS;
+  const hasPendingAreaSearch = Boolean(
+    locationStatus === 'granted' && mapCenter && searchCenter
+      && calculateDistanceMeters(mapCenter, searchCenter) >= SEARCH_AREA_MOVEMENT_METERS,
+  );
 
-  // Searches only after the user deliberately moves the map to a new area.
+  // Re-centers discovery on the real user; remote map panning must not expose
+  // trails outside the nearby radius.
+  // Purpose: Implements the search this area operation.
   const searchThisArea = useCallback(async () => {
-    if (mountedRef.current) setIsLoading(true);
-    await loadCatalog(mapCenter);
-  }, [loadCatalog, mapCenter]);
+    if (mountedRef.current) setIsRefreshing(true);
+    if (userLocation && mountedRef.current) setMapCenter(userLocation);
+    await loadCatalog(userLocation);
+  }, [loadCatalog, userLocation]);
 
   // Saves or removes one trail favorite using the existing trail service.
+  // Purpose: Implements the toggle favorite operation.
   const toggleFavorite = useCallback(async (trailId: string) => {
-    const next = await setTrailFavorite(trailId, !favoriteIds.includes(trailId));
-    if (mountedRef.current) setFavoriteIds(next);
+    if (favoriteMutationIdsRef.current.has(trailId)) return;
+    favoriteMutationIdsRef.current.add(trailId);
+    const wasFavorite = favoriteIds.includes(trailId);
+    if (mountedRef.current) {
+      setFavoriteBusyIds((current) => [...current, trailId]);
+      setFavoriteIds((current) => wasFavorite
+        ? current.filter((id) => id !== trailId)
+        : [...new Set([...current, trailId])]);
+    }
+    try {
+      const next = await setTrailFavorite(trailId, !wasFavorite);
+      if (mountedRef.current) setFavoriteIds(next);
+    } catch (favoriteError) {
+      if (mountedRef.current) {
+        setFavoriteIds((current) => wasFavorite
+          ? [...new Set([...current, trailId])]
+          : current.filter((id) => id !== trailId));
+      }
+      throw favoriteError;
+    } finally {
+      favoriteMutationIdsRef.current.delete(trailId);
+      if (mountedRef.current) {
+        setFavoriteBusyIds((current) => current.filter((id) => id !== trailId));
+      }
+    }
   }, [favoriteIds]);
 
   return {
@@ -294,13 +756,19 @@ export function useNearbyTrails() {
     totalResults: allTrails.length,
     meetups,
     meetupCounts,
+    refreshMeetups,
     filters,
     setFilters,
     query,
     setQuery,
+    searchQuery,
+    isSearchingQuery,
+    isLocationSearchActive,
     favoriteIds,
+    favoriteBusyIds,
     toggleFavorite,
     isLoading,
+    isRefreshing,
     error,
     locationStatus,
     locationWarning,

@@ -89,6 +89,11 @@ export interface IdVerificationResult {
 
   message: string;
 
+  // Purpose:
+  // Contains the short-lived server-issued ticket only
+  // after successful ID information matching.
+  verificationTicket?: string | null;
+
   informationMatched?: boolean;
 
   requiresManualReview?: boolean;
@@ -300,39 +305,35 @@ export async function verifyOnboardingId(
   // ====================================================
   // PREPARE ID IMAGE
   // ====================================================
-
-  const imageBlob =
-    await getImageBlob(
-      request.idImageUri
-    );
-
-
-  // ====================================================
-  // IMAGE SIZE CHECK
+  //
+  // React Native should send the local file URI directly
+  // through FormData. Converting the URI to a browser Blob
+  // can produce a zero-byte multipart upload on iOS.
+  //
   // ====================================================
 
-  const MAX_IMAGE_SIZE =
-    10 * 1024 * 1024;
+  const imageUri =
+    request.idImageUri;
+
+  const normalizedImageUri =
+    imageUri
+      .split('?')[0]
+      .toLowerCase();
+
+  let imageType =
+    'image/jpeg';
 
   if (
-    imageBlob.size >
-    MAX_IMAGE_SIZE
+    normalizedImageUri.endsWith('.png')
   ) {
-    throw new IdVerificationError(
-      'The ID image is too large. Please select an image under 10 MB.'
-    );
+    imageType =
+      'image/png';
+  } else if (
+    normalizedImageUri.endsWith('.webp')
+  ) {
+    imageType =
+      'image/webp';
   }
-
-
-  // ====================================================
-  // IMAGE TYPE
-  // ====================================================
-
-  const imageType =
-    determineImageType(
-      imageBlob
-    );
-
 
   const imageName =
     determineFileName(
@@ -400,8 +401,11 @@ export async function verifyOnboardingId(
 
   formData.append(
     'idImage',
-    imageBlob,
-    imageName
+    {
+      uri: imageUri,
+      name: imageName,
+      type: imageType,
+    } as any
   );
 
 
@@ -424,6 +428,12 @@ export async function verifyOnboardingId(
   let data: any;
   let error: any;
 
+
+  if (!idVerifySupabase) {
+    throw new IdVerificationError(
+      'ID verification is not configured on this build.'
+    );
+  }
 
   try {
     const result =

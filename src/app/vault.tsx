@@ -1,11 +1,42 @@
-import { RelicDetailModal } from "@/components/relic-detail-modal";
-import { RELICS, type Relic, type RelicRarity, UNDISCOVERED_RELIC_ICON } from "@/constants/relics";
-import { getPlayerProgress } from "@/utils/player-progress";
-import { syncServerVaultCache } from "@/services/vault";
-import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
-import { Dimensions, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  RelicDetailModal,
+} from "@/components/relic-detail-modal";
+import {
+  RELICS,
+  type Relic,
+  type RelicRarity,
+  UNDISCOVERED_RELIC_ICON,
+} from "@/constants/relics";
+import {
+  syncServerVaultCache,
+} from "@/services/vault";
+import {
+  getPlayerProgress,
+} from "@/utils/player-progress";
+import {
+  useFocusEffect,
+  useRouter,
+} from "expo-router";
+import {
+  useCallback,
+  useState,
+} from "react";
+import {
+  Alert,
+  Dimensions,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import {
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
+import {
+  useAccountAccess,
+} from "@/hooks/use-account-access";
 
 const screen = Dimensions.get("window");
 const isSmallPhone = screen.height < 740 || screen.width < 380;
@@ -23,30 +54,98 @@ const tabImages = {
 
 const bottomTabs = [
   { key: "home", label: "Home", image: tabImages.home, route: "/home-backup" },
-  { key: "mission", label: "Mission", image: tabImages.mission, route: "/mission" },
+  {
+    key: "mission",
+    label: "Mission",
+    image: tabImages.mission,
+    route: "/mission",
+  },
   { key: "trails", label: "Trails", image: tabImages.trails, route: "/trails" },
   { key: "vault", label: "Vault", image: tabImages.vault, route: "/vault" },
-  { key: "profile", label: "Profile", image: tabImages.profile, route: "/profile" },
-  { key: "companion", label: "Compan...", image: tabImages.companion, route: "/companion" },
+  {
+    key: "profile",
+    label: "Profile",
+    image: tabImages.profile,
+    route: "/profile",
+  },
+  {
+    key: "companion",
+    label: "Compan...",
+    image: tabImages.companion,
+    route: "/companion",
+  },
 ] as const;
+// Purpose: Renders the vault screen interface.
 export default function VaultScreen() {
   const router = useRouter();
   const safeArea = useSafeAreaInsets();
+
+  // Purpose:
+  // Loads account permission so the Vault navigation bar
+  // can explain why Trails are unavailable.
+  const {
+    access,
+    loading: accessLoading,
+  } = useAccountAccess();
+
+  const canUseTrails =
+    access?.canUseTrails === true;
+
+
+  // Purpose:
+  // Navigates from Vault while protecting the Trails route
+  // for Kids Mode and other non-verified accounts.
+  const openBottomTab = (
+    tab: (typeof bottomTabs)[number],
+  ) => {
+
+    if (tab.key === "trails") {
+
+      if (accessLoading) {
+        Alert.alert(
+          "Checking Access",
+          "Mission Trails is checking your trail access.",
+        );
+
+        return;
+      }
+
+      if (!canUseTrails) {
+        Alert.alert(
+          "Trails Locked",
+          "Trails and Meetups require ID verification. Kids Mode can continue using the rest of Mission Trails.",
+        );
+
+        return;
+      }
+    }
+
+    router.push(tab.route);
+  };
   const [collectedRelicIds, setCollectedRelicIds] = useState<string[]>([]);
-  const [collectedAtByRelicId, setCollectedAtByRelicId] = useState<Record<string, string>>({});
+  const [collectedAtByRelicId, setCollectedAtByRelicId] = useState<
+    Record<string, string>
+  >({});
+  const [relicQuantityById, setRelicQuantityById] = useState<
+    Record<string, number>
+  >({});
   const [selectedRelic, setSelectedRelic] = useState<Relic | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       let isActive = true;
 
+      // Purpose: Loads collected relics.
       async function loadCollectedRelics() {
         try {
-          const progress = await syncServerVaultCache().catch(() => getPlayerProgress());
+          const progress = await syncServerVaultCache().catch(() =>
+            getPlayerProgress(),
+          );
 
           if (isActive) {
             setCollectedRelicIds(progress.collectedRelicIds);
             setCollectedAtByRelicId(progress.collectedAtByRelicId);
+            setRelicQuantityById(progress.relicQuantityById);
           }
         } catch (error) {
           console.error("Could not load collected relics:", error);
@@ -61,9 +160,21 @@ export default function VaultScreen() {
     }, []),
   );
 
-  const collectedRelics = RELICS.filter((relic) => collectedRelicIds.includes(relic.id));
+  const collectedRelics = RELICS.filter(
+    (relic) => (relicQuantityById[relic.id] ?? 0) > 0,
+  );
+
+  const totalRelicCopies = Object.values(relicQuantityById).reduce(
+    (total, quantity) => total + quantity,
+    0,
+  );
+
+  // Purpose: Implements the rarity total operation.
   const rarityTotal = (rarity: RelicRarity) =>
-    collectedRelics.filter((relic) => relic.rarity === rarity).length;
+    RELICS.filter((relic) => relic.rarity === rarity).reduce(
+      (total, relic) => total + (relicQuantityById[relic.id] ?? 0),
+      0,
+    );
 
   return (
     <View style={styles.container}>
@@ -89,17 +200,23 @@ export default function VaultScreen() {
             </View>
 
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>{collectedRelics.length}/{RELICS.length}</Text>
+              <Text style={styles.statNumber}>
+                {collectedRelics.length}/{RELICS.length}
+              </Text>
               <Text style={styles.statText}>Collection</Text>
             </View>
 
             <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: "#f000ff" }]}>{rarityTotal("Epic")}</Text>
+              <Text style={[styles.statNumber, { color: "#f000ff" }]}>
+                {rarityTotal("Epic")}
+              </Text>
               <Text style={styles.statText}>Epic</Text>
             </View>
 
             <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: "#00d9ff" }]}>{rarityTotal("Rare")}</Text>
+              <Text style={[styles.statNumber, { color: "#00d9ff" }]}>
+                {rarityTotal("Rare")}
+              </Text>
               <Text style={styles.statText}>Rare</Text>
             </View>
           </View>
@@ -114,7 +231,9 @@ export default function VaultScreen() {
               <Pressable
                 key={item.id}
                 accessibilityRole="button"
-                accessibilityLabel={isCollected ? `View ${item.name}` : "View locked relic"}
+                accessibilityLabel={
+                  isCollected ? `View ${item.name}` : "View locked relic"
+                }
                 onPress={() => setSelectedRelic(item)}
                 style={[
                   styles.card,
@@ -124,7 +243,8 @@ export default function VaultScreen() {
                       ? "rgba(237,16,149,0.15)"
                       : "rgba(80,45,70,0.25)",
                   },
-                ]}>
+                ]}
+              >
                 <View style={[styles.iconBox, { borderColor: displayColor }]}>
                   <Image
                     source={isCollected ? item.icon : UNDISCOVERED_RELIC_ICON}
@@ -167,13 +287,31 @@ export default function VaultScreen() {
                 key={tab.key}
                 accessibilityRole="button"
                 accessibilityLabel={`Go to ${tab.label}`}
-                style={({ pressed }) => [styles.tabButton, pressed && styles.pressed]}
-                onPress={() => router.push(tab.route)}
+                style={({ pressed }) => [
+                  styles.tabButton,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => openBottomTab(tab)}
               >
-                <View style={[styles.tabIconWrap, isActiveTab && styles.activeTabIconWrap]}>
-                  <Image source={tab.image} style={styles.tabIcon} resizeMode="contain" />
+                <View
+                  style={[
+                    styles.tabIconWrap,
+                    isActiveTab && styles.activeTabIconWrap,
+                  ]}
+                >
+                  <Image
+                    source={tab.image}
+                    style={styles.tabIcon}
+                    resizeMode="contain"
+                  />
                 </View>
-                <Text style={[styles.tabLabel, isActiveTab && styles.activeTabLabel]} numberOfLines={1}>
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    isActiveTab && styles.activeTabLabel,
+                  ]}
+                  numberOfLines={1}
+                >
                   {tab.label}
                 </Text>
               </Pressable>
@@ -184,8 +322,12 @@ export default function VaultScreen() {
 
       <RelicDetailModal
         relic={selectedRelic}
-        isCollected={selectedRelic ? collectedRelicIds.includes(selectedRelic.id) : false}
-        collectedAt={selectedRelic ? collectedAtByRelicId[selectedRelic.id] : undefined}
+        isCollected={
+          selectedRelic ? collectedRelicIds.includes(selectedRelic.id) : false
+        }
+        collectedAt={
+          selectedRelic ? collectedAtByRelicId[selectedRelic.id] : undefined
+        }
         onClose={() => setSelectedRelic(null)}
       />
     </View>
@@ -205,13 +347,13 @@ const styles = StyleSheet.create({
   },
 
   vaultIcon: {
-  width: 84,
-  height: 84,
-  resizeMode: "contain",
-  alignSelf: "center",
-  marginTop: -10,
-  marginBottom: 8,
- },
+    width: 84,
+    height: 84,
+    resizeMode: "contain",
+    alignSelf: "center",
+    marginTop: -10,
+    marginBottom: 8,
+  },
 
   statsBox: {
     borderWidth: 1,
@@ -310,10 +452,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   itemIcon: {
-  width: 52,
-  height: 52,
-  resizeMode: "contain",
-},
+    width: 52,
+    height: 52,
+    resizeMode: "contain",
+  },
 
   rankTitle: {
     color: "#fff",

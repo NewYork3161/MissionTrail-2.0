@@ -34,13 +34,17 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { router } from 'expo-router';
 
-import { supabase } from '../../lib/supabase';
+import {
+  clearOnboardingVerificationTicket,
+} from '@/services/onboarding-verification-ticket-service';
+
 
 
 // ======================================================
 // SCREEN
 // ======================================================
 
+// Purpose: Collects the profile and identity details needed during onboarding.
 export default function OnboardingUserInfo() {
 
   // ====================================================
@@ -79,12 +83,15 @@ export default function OnboardingUserInfo() {
   // LOADING STATE
   // ====================================================
 
-  const [saving, setSaving] =
-    useState(false);
 
   const [
     openingIdVerification,
     setOpeningIdVerification,
+  ] = useState(false);
+
+  const [
+    enteringKidsMode,
+    setEnteringKidsMode,
   ] = useState(false);
 
 
@@ -100,6 +107,7 @@ export default function OnboardingUserInfo() {
   //
   // ====================================================
 
+  // Purpose: Shows an onboarding message using the platform alert dialog.
   const showMessage = (
     title: string,
     message: string
@@ -127,6 +135,7 @@ export default function OnboardingUserInfo() {
   // VALIDATE ID INFORMATION
   // ====================================================
 
+  // Purpose: Checks that the required identity fields have been entered.
   const validateIdentityInformation =
     (): boolean => {
 
@@ -168,110 +177,6 @@ export default function OnboardingUserInfo() {
 
 
   // ====================================================
-  // GET CURRENT USER
-  // ====================================================
-
-  const getCurrentUser =
-    async () => {
-
-      const {
-        data: { user },
-        error,
-      } =
-        await supabase.auth.getUser();
-
-
-      if (error) {
-        throw error;
-      }
-
-
-      if (!user) {
-
-        throw new Error(
-          'SIGNED_OUT'
-        );
-      }
-
-
-      return user;
-    };
-
-
-  // ====================================================
-  // SAVE ONBOARDING INFORMATION
-  // ====================================================
-
-  const saveOnboardingInformation =
-    async () => {
-
-      const user =
-        await getCurrentUser();
-
-
-      const {
-        error: onboardingError,
-      } =
-        await supabase
-          .from('user_onboarding')
-          .upsert(
-            {
-              user_id:
-                user.id,
-
-              first_name:
-                firstName.trim(),
-
-              last_name:
-                lastName.trim(),
-
-              display_name:
-                displayName.trim() || null,
-
-              email:
-                email.trim() || null,
-
-              phone:
-                phone.trim() || null,
-
-              birthday:
-                birthday.trim() || null,
-
-              city:
-                city.trim() || null,
-
-              state:
-                state.trim() || null,
-
-              country:
-                country.trim() || null,
-
-              profile_complete:
-                false,
-
-              onboarding_complete:
-                false,
-
-              updated_at:
-                new Date().toISOString(),
-            },
-            {
-              onConflict:
-                'user_id',
-            }
-          );
-
-
-      if (onboardingError) {
-        throw onboardingError;
-      }
-
-
-      return user;
-    };
-
-
-  // ====================================================
   // OPEN PHOTO ID VERIFICATION
   // ====================================================
   //
@@ -289,6 +194,7 @@ export default function OnboardingUserInfo() {
   //
   // ====================================================
 
+  // Purpose: Validates the form and opens photo ID verification.
   const openCheckId =
     () => {
 
@@ -303,7 +209,7 @@ export default function OnboardingUserInfo() {
 
       if (
         openingIdVerification ||
-        saving
+        enteringKidsMode
       ) {
 
         console.log(
@@ -342,13 +248,13 @@ export default function OnboardingUserInfo() {
 
 
         console.log(
-          '[ONBOARDING] Opening onboarding_check_id...'
+          '[ONBOARDING] Opening onboarding questionnaire...'
         );
 
 
         router.push({
           pathname:
-            '/onboarding_check_id',
+            '/onboarding_questionnaire',
 
           params: {
 
@@ -372,6 +278,15 @@ export default function OnboardingUserInfo() {
 
             country:
               country.trim(),
+
+            // Purpose:
+            // Explicitly marks this as the Photo ID path so
+            // a previous Kids Mode choice cannot carry over.
+            accountAccessMode:
+              'id_required',
+
+            idVerificationStatus:
+              'pending',
           },
         });
 
@@ -402,72 +317,140 @@ export default function OnboardingUserInfo() {
 
 
   // ====================================================
-  // SAVE AND CONTINUE
+  // CONTINUE IN KIDS MODE
   // ====================================================
 
-  const saveAndContinue =
+  // Purpose:
+  // Lets the user explicitly choose reduced-access Kids Mode
+  // from the onboarding information screen.
+  //
+  // Kids Mode skips Photo ID verification and continues
+  // directly toward account creation with:
+  //
+  // - Trails locked
+  // - Meetups locked
+  //
+  // Any previously-issued verified ticket is deleted first.
+  const continueAsKid =
     async () => {
 
       if (
-        saving ||
-        openingIdVerification
+        openingIdVerification ||
+        enteringKidsMode
       ) {
+        return;
+      }
+
+
+      // Purpose:
+      // Kids Mode still needs the basic identity information
+      // required by the account creation flow.
+      if (!firstName.trim()) {
+
+        showMessage(
+          'First Name Required',
+          'Please enter your first name before continuing.'
+        );
+
+        return;
+      }
+
+
+      if (!lastName.trim()) {
+
+        showMessage(
+          'Last Name Required',
+          'Please enter your last name before continuing.'
+        );
+
+        return;
+      }
+
+
+      if (!birthday.trim()) {
+
+        showMessage(
+          'Birthday Required',
+          'Please enter your date of birth before continuing.'
+        );
+
         return;
       }
 
 
       try {
 
-        setSaving(true);
-
-
-        // ------------------------------------------------
-        // SAVE USER INFORMATION
-        // ------------------------------------------------
-
-        await saveOnboardingInformation();
-
-
-        // ------------------------------------------------
-        // CONTINUE TO QUESTIONNAIRE
-        // ------------------------------------------------
-
-        router.push(
-          '/onboarding_questionnaire'
+        setEnteringKidsMode(
+          true
         );
 
 
-      } catch (error: any) {
+        // Purpose:
+        // Removes any old verified ticket so Kids Mode can
+        // never inherit verified account permissions.
+        await clearOnboardingVerificationTicket();
+
+
+        console.log(
+          '[ONBOARDING] Kids Mode selected. Opening questionnaire.'
+        );
+
+
+        router.replace({
+          pathname:
+            '/onboarding_questionnaire',
+
+          params: {
+
+            firstName:
+              firstName.trim(),
+
+            lastName:
+              lastName.trim(),
+
+            displayName:
+              displayName.trim(),
+
+            birthday:
+              birthday.trim(),
+
+            city:
+              city.trim(),
+
+            state:
+              state.trim(),
+
+            country:
+              country.trim(),
+
+            accountAccessMode:
+              'kids',
+
+            idVerificationStatus:
+              'skipped_kids',
+          },
+        });
+
+
+      } catch (error) {
 
         console.error(
-          'Error saving onboarding information:',
+          '[ONBOARDING] Unable to enter Kids Mode:',
           error
         );
 
 
-        if (
-          error?.message ===
-          'SIGNED_OUT'
-        ) {
-
-          showMessage(
-            'Not Signed In',
-            'We could not find your account. Please sign in again.'
-          );
-
-          return;
-        }
-
-
         showMessage(
-          'Unable to Save',
-          'Something went wrong while saving your information. Please try again.'
+          'Unable to Continue',
+          'Kids Mode could not be opened. Please try again.'
         );
 
 
       } finally {
 
-        setSaving(false);
+        setEnteringKidsMode(
+          false
+        );
       }
     };
 
@@ -477,8 +460,8 @@ export default function OnboardingUserInfo() {
   // ====================================================
 
   const busy =
-    saving ||
-    openingIdVerification;
+    openingIdVerification ||
+    enteringKidsMode;
 
 
   // ====================================================
@@ -746,106 +729,105 @@ export default function OnboardingUserInfo() {
 
 
       {/* ==================================================
-          VERIFY PHOTO ID
+          ONBOARDING ACCESS CHOICES
       ================================================== */}
 
-      <TouchableOpacity
-        style={[
-          styles.photoButton,
+      <View style={styles.accessChoiceRow}>
 
-          busy &&
-            styles.buttonDisabled,
-        ]}
-        onPress={openCheckId}
-        activeOpacity={0.8}
-        disabled={busy}
-      >
+        {/* ================================================
+            VERIFY PHOTO ID
+        ================================================ */}
 
-        {openingIdVerification ? (
+        <TouchableOpacity
+          style={[
+            styles.accessChoiceButton,
 
-          <ActivityIndicator
-            size="small"
-            color="#63D8FF"
-          />
-
-        ) : (
-
-          <Ionicons
-            name="id-card-outline"
-            size={28}
-            color="#63D8FF"
-          />
-
-        )}
-
-
-        <Text
-          style={
-            styles.photoButtonText
-          }
+            busy &&
+              styles.accessChoiceButtonDisabled,
+          ]}
+          onPress={openCheckId}
+          activeOpacity={0.8}
+          disabled={busy}
         >
 
-          {openingIdVerification
-            ? 'Opening ID Verification...'
-            : 'Verify Photo ID'}
-
-        </Text>
-
-      </TouchableOpacity>
-
-
-      {/* ==================================================
-          CONTINUE
-      ================================================== */}
-
-      <TouchableOpacity
-        style={[
-          styles.button,
-
-          busy &&
-            styles.buttonDisabled,
-        ]}
-        onPress={saveAndContinue}
-        activeOpacity={0.8}
-        disabled={busy}
-      >
-
-        {saving ? (
-
-          <View
-            style={
-              styles.loadingRow
-            }
-          >
+          {openingIdVerification ? (
 
             <ActivityIndicator
               size="small"
-              color="#FFFFFF"
+              color="#63D8FF"
             />
 
-            <Text
-              style={
-                styles.loadingButtonText
-              }
-            >
-              SAVING...
-            </Text>
+          ) : (
 
-          </View>
+            <Ionicons
+              name="id-card-outline"
+              size={25}
+              color="#63D8FF"
+            />
 
-        ) : (
+          )}
+
 
           <Text
             style={
-              styles.buttonText
+              styles.accessChoiceText
             }
+            numberOfLines={1}
           >
-            CONTINUE
+            Verify Photo ID
           </Text>
 
-        )}
+        </TouchableOpacity>
 
-      </TouchableOpacity>
+
+        {/* ================================================
+            FOR KIDS
+        ================================================ */}
+
+        <TouchableOpacity
+          style={[
+            styles.accessChoiceButton,
+
+            busy &&
+              styles.accessChoiceButtonDisabled,
+          ]}
+          onPress={continueAsKid}
+          activeOpacity={0.8}
+          disabled={busy}
+        >
+
+          {enteringKidsMode ? (
+
+            <ActivityIndicator
+              size="small"
+              color="#63D8FF"
+            />
+
+          ) : (
+
+            <Ionicons
+              name="happy-outline"
+              size={25}
+              color="#63D8FF"
+            />
+
+          )}
+
+
+          <Text
+            style={
+              styles.accessChoiceText
+            }
+            numberOfLines={1}
+          >
+            For Kids
+          </Text>
+
+        </TouchableOpacity>
+
+      </View>
+
+
 
     </ScrollView>
   );
@@ -936,6 +918,76 @@ const styles =
     },
 
 
+    // ====================================================
+    // ACCESS CHOICE BUTTONS
+    // ====================================================
+
+    accessChoiceRow: {
+
+      width: '100%',
+
+      maxWidth: 550,
+
+      flexDirection: 'row',
+
+      alignItems: 'center',
+
+      gap: 12,
+
+      marginTop: 8,
+    },
+
+
+    accessChoiceButton: {
+
+      flex: 1,
+
+      minWidth: 0,
+
+      height: 64,
+
+      flexDirection: 'row',
+
+      alignItems: 'center',
+
+      justifyContent: 'center',
+
+      backgroundColor:
+        '#181028',
+
+      borderWidth: 1.5,
+
+      borderColor:
+        '#7B42F6',
+
+      borderRadius: 18,
+
+      paddingHorizontal: 10,
+    },
+
+
+    accessChoiceButtonDisabled: {
+
+      opacity: 0.5,
+    },
+
+
+    accessChoiceText: {
+
+      flexShrink: 1,
+
+      color: '#FFFFFF',
+
+      fontSize: 15,
+
+      fontWeight: '700',
+
+      marginLeft: 8,
+
+      textAlign: 'center',
+    },
+
+
     input: {
 
       flex: 1,
@@ -996,6 +1048,74 @@ const styles =
       fontWeight: '600',
 
       marginLeft: 12,
+    },
+
+
+    // ====================================================
+    // KIDS MODE BUTTON
+    // ====================================================
+
+    kidsButton: {
+
+      width: '100%',
+
+      maxWidth: 550,
+
+      minHeight: 92,
+
+      borderRadius: 20,
+
+      borderWidth: 1.5,
+
+      borderColor:
+        '#63D8FF',
+
+      backgroundColor:
+        '#181028',
+
+      flexDirection:
+        'row',
+
+      alignItems:
+        'center',
+
+      paddingHorizontal: 24,
+
+      paddingVertical: 18,
+
+      marginBottom: 24,
+    },
+
+
+    kidsButtonTextContainer: {
+
+      flex: 1,
+
+      marginLeft: 18,
+    },
+
+
+    kidsButtonText: {
+
+      color: '#FFFFFF',
+
+      fontSize: 22,
+
+      fontWeight: 'bold',
+
+      letterSpacing: 1,
+    },
+
+
+    kidsButtonSubtitle: {
+
+      color: '#B8A7FF',
+
+      fontSize: 15,
+
+      lineHeight: 21,
+
+      marginTop: 4,
     },
 
 

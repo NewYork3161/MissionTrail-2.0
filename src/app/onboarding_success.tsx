@@ -34,29 +34,103 @@ import {
 
 import { Ionicons } from '@expo/vector-icons';
 
-import { router } from 'expo-router';
+import {
+  router,
+  useLocalSearchParams,
+} from 'expo-router';
 
 
 // ======================================================
 // SCREEN
 // ======================================================
 
+// Purpose:
+// Shows the correct completion message after ID verification
+// or Kids Mode selection, then carries onboarding data into Signup.
 export default function OnboardingSuccess() {
 
-
-  // ==================================================== 
-  // CONTINUE TO LOGIN
+  // ====================================================
+  // RECEIVE ONBOARDING ACCESS INFORMATION
   // ====================================================
 
+  const params = useLocalSearchParams<{
+    firstName?: string;
+    lastName?: string;
+    displayName?: string;
+    birthday?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+    questionnaireAnswers?: string;
+    accountAccessMode?: string;
+    idVerificationStatus?: string;
+  }>();
+
+
+  // Purpose:
+  // Determines whether this onboarding session is Kids Mode.
+  // Any non-kids path is treated as verified because this screen
+  // is reached only after ID success or the explicit Kids button.
+  const isKidsMode =
+    params.accountAccessMode === 'kids';
+
+
+  // ====================================================
+  // CONTINUE TO ACCOUNT CREATION
+  // ====================================================
+
+  // Purpose:
+  // Sends the onboarding information and access mode into Signup
+  // so Supabase Auth metadata can create the correct account record.
   const continueOnboarding = () => {
 
     console.log(
-      '[ONBOARDING SUCCESS] Identity verification complete. Going to login.'
+      isKidsMode
+        ? '[ONBOARDING SUCCESS] Kids Mode selected. Opening Signup.'
+        : '[ONBOARDING SUCCESS] Identity verified. Opening Signup.'
     );
 
-    router.replace(
-      '/login'
-    );
+
+    router.replace({
+      pathname:
+        '/Signup',
+
+      params: {
+        firstName:
+          params.firstName ?? '',
+
+        lastName:
+          params.lastName ?? '',
+
+        displayName:
+          params.displayName ?? '',
+
+        birthday:
+          params.birthday ?? '',
+
+        city:
+          params.city ?? '',
+
+        state:
+          params.state ?? '',
+
+        country:
+          params.country ?? '',
+
+        questionnaireAnswers:
+          params.questionnaireAnswers ?? '{}',
+
+        accountAccessMode:
+          isKidsMode
+            ? 'kids'
+            : 'verified',
+
+        idVerificationStatus:
+          isKidsMode
+            ? 'skipped_kids'
+            : 'verified',
+      },
+    });
   };
 
 
@@ -74,9 +148,8 @@ export default function OnboardingSuccess() {
 
       <View style={styles.card}>
 
-
         {/* ==============================================
-            SUCCESS ICON
+            ACCESS ICON
         ============================================== */}
 
         <View style={styles.iconOuter}>
@@ -84,7 +157,11 @@ export default function OnboardingSuccess() {
           <View style={styles.iconInner}>
 
             <Ionicons
-              name="shield-checkmark-outline"
+              name={
+                isKidsMode
+                  ? 'happy-outline'
+                  : 'shield-checkmark-outline'
+              }
               size={72}
               color="#63D8FF"
             />
@@ -99,7 +176,11 @@ export default function OnboardingSuccess() {
         ============================================== */}
 
         <Text style={styles.title}>
-          Identity Verified
+
+          {isKidsMode
+            ? 'Kids Mode'
+            : 'Identity Verified'}
+
         </Text>
 
 
@@ -108,7 +189,11 @@ export default function OnboardingSuccess() {
         ============================================== */}
 
         <Text style={styles.subtitle}>
-          Your ID has been successfully verified.
+
+          {isKidsMode
+            ? 'You can continue without ID verification.'
+            : 'Your ID has been successfully verified.'}
+
         </Text>
 
 
@@ -121,22 +206,32 @@ export default function OnboardingSuccess() {
           <View style={styles.successHeader}>
 
             <Ionicons
-              name="checkmark-circle"
+              name={
+                isKidsMode
+                  ? 'lock-closed'
+                  : 'checkmark-circle'
+              }
               size={27}
               color="#63D8FF"
             />
 
             <Text style={styles.successTitle}>
-              Verification Complete
+
+              {isKidsMode
+                ? 'Kids Mode Restrictions'
+                : 'Verification Complete'}
+
             </Text>
 
           </View>
 
 
           <Text style={styles.successText}>
-            The information on your Photo ID has been
-            successfully checked against the information
-            you provided during onboarding.
+
+            {isKidsMode
+              ? 'Kids Mode can use Mission Trails features that do not require identity verification. Trails and Meetups will remain locked.'
+              : 'The information on your Photo ID has been successfully checked against the information you provided during onboarding.'}
+
           </Text>
 
         </View>
@@ -155,9 +250,11 @@ export default function OnboardingSuccess() {
           />
 
           <Text style={styles.securityText}>
-            Your identity verification is complete.
-            You can now continue to the MissionTrail
-            login page.
+
+            {isKidsMode
+              ? 'Your account will remember Kids Mode after account creation. Trails and Meetups will stay unavailable.'
+              : 'Your verified account will be eligible for Trails and Meetups after account creation.'}
+
           </Text>
 
         </View>
@@ -174,7 +271,7 @@ export default function OnboardingSuccess() {
         >
 
           <Text style={styles.continueButtonText}>
-            CONTINUE
+            CREATE ACCOUNT
           </Text>
 
           <Ionicons
@@ -191,9 +288,12 @@ export default function OnboardingSuccess() {
         ============================================== */}
 
         <Text style={styles.bottomText}>
-          Identity verification complete. Continue to sign in.
-        </Text>
 
+          {isKidsMode
+            ? 'Continue to create your Kids Mode account.'
+            : 'Continue to create your verified account.'}
+
+        </Text>
 
       </View>
 

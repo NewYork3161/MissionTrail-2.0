@@ -43,6 +43,8 @@ import {
 
 import * as ImagePicker from 'expo-image-picker';
 
+import { supabase } from '../../lib/supabase';
+
 
 // ======================================================
 // AI AUTHENTICATION SERVICE
@@ -56,11 +58,17 @@ import {
   IdVerificationResult,
 } from '../services/onboarding_ai_check_id_authentication';
 
+import {
+  saveOnboardingVerificationTicket,
+} from '@/services/onboarding-verification-ticket-service';
+
+
 
 // ======================================================
 // SCREEN
 // ======================================================
 
+// Purpose: Guides the user through selecting and verifying a photo ID.
 export default function OnboardingCheckId() {
 
   // ====================================================
@@ -75,7 +83,13 @@ export default function OnboardingCheckId() {
     city?: string;
     state?: string;
     country?: string;
-  }>();
+    questionnaireAnswers?: string;
+  
+    // Purpose:
+    // Explicitly marks this ID check as an upgrade
+    // for an already-existing account.
+    upgradeExistingAccount?: string;
+}>();
 
 
   const firstName =
@@ -120,6 +134,12 @@ export default function OnboardingCheckId() {
       : '';
 
 
+  const questionnaireAnswers =
+    typeof params.questionnaireAnswers === 'string'
+      ? params.questionnaireAnswers
+      : '{}';
+
+
   // ====================================================
   // STATE
   // ====================================================
@@ -147,6 +167,7 @@ export default function OnboardingCheckId() {
   // CLEAR PREVIOUS VERIFICATION
   // ====================================================
 
+  // Purpose: Clears an old verification result before the ID image changes.
   const clearVerificationResult = () => {
     setVerificationResult(null);
   };
@@ -156,6 +177,7 @@ export default function OnboardingCheckId() {
   // SHOW MESSAGE
   // ====================================================
 
+  // Purpose: Shows an onboarding message using the platform alert dialog.
   const showMessage = (
     title: string,
     message: string
@@ -185,6 +207,7 @@ export default function OnboardingCheckId() {
   //
   // ====================================================
 
+  // Purpose: Lets the user choose an ID image from the device library.
   const selectIdImage = async () => {
 
     if (verifying) {
@@ -265,6 +288,7 @@ export default function OnboardingCheckId() {
   //
   // ====================================================
 
+  // Purpose: Opens the camera so the user can photograph an ID.
   const takeIdPhoto = async () => {
 
     if (verifying) {
@@ -344,6 +368,7 @@ export default function OnboardingCheckId() {
   // REMOVE SELECTED ID
   // ====================================================
 
+  // Purpose: Removes the selected ID image and resets its verification state.
   const removeIdImage = () => {
 
     if (verifying) {
@@ -361,6 +386,7 @@ export default function OnboardingCheckId() {
   // CHECK REQUIRED ONBOARDING INFORMATION
   // ====================================================
 
+  // Purpose: Checks that the required identity details are ready for verification.
   const validateOnboardingInformation =
     (): boolean => {
 
@@ -405,6 +431,7 @@ export default function OnboardingCheckId() {
   // VERIFY ID
   // ====================================================
 
+  // Purpose: Submits the ID image and onboarding details for identity verification.
   const verifyId = async () => {
 
     // --------------------------------------------------
@@ -525,13 +552,203 @@ export default function OnboardingCheckId() {
         )
       ) {
 
-        console.log(
-          '[CHECK ID] ID information matched. Opening onboarding_success...'
+        // Purpose:
+        // Saves the one-time ticket issued by the trusted
+        // verification server before leaving this screen.
+        //
+        // The ticket is deliberately kept out of
+        // Expo Router parameters.
+        if (!result.verificationTicket) {
+
+          throw new Error(
+            'Secure verification ticket was not returned. Please verify your ID again.'
+          );
+        }
+
+
+        // Purpose:
+        // Checks whether this verification belongs to an
+        // already-created signed-in account.
+        const {
+          data: sessionData,
+        } =
+          await supabase.auth.getSession();
+
+
+        const existingUser =
+          sessionData.session?.user ??
+          null;
+
+
+        // Purpose:
+        // Existing-account verification is allowed only when
+        // another screen explicitly opened Check ID as an
+        // account-upgrade flow.
+        //
+        // A saved Supabase session by itself must NEVER turn
+        // normal signup verification into an account upgrade.
+        const upgradeExistingAccount =
+          params.upgradeExistingAccount ===
+          'true';
+
+
+        // Purpose:
+        // Existing Kids Mode accounts must consume the
+        // trusted server ticket before the database can
+        // change them to verified access.
+        if (
+          existingUser &&
+          upgradeExistingAccount
+        ) {
+
+          console.log(
+            '[CHECK ID] Existing account detected. Redeeming secure verification ticket...'
+          );
+
+
+          let parsedQuestionnaireAnswers: Record<string, unknown> = {};
+
+
+          // Purpose:
+          // Converts the questionnaire route value into JSON
+          // before securely saving it with the verified account.
+          try {
+
+            parsedQuestionnaireAnswers =
+              JSON.parse(
+                questionnaireAnswers
+              );
+
+          } catch {
+
+            parsedQuestionnaireAnswers =
+              {};
+          }
+
+
+          const {
+            data: upgraded,
+            error: upgradeError,
+          } =
+            await supabase.rpc(
+              'redeem_existing_user_verification_ticket',
+              {
+                p_verification_ticket:
+                  result.verificationTicket,
+
+                p_first_name:
+                  firstName.trim(),
+
+                p_last_name:
+                  lastName.trim(),
+
+                p_birthday:
+                  birthday.trim(),
+
+                p_display_name:
+                  displayName.trim(),
+
+                p_city:
+                  city.trim(),
+
+                p_state:
+                  state.trim(),
+
+                p_country:
+                  country.trim(),
+
+                p_questionnaire_answers:
+                  parsedQuestionnaireAnswers,
+              }
+            );
+
+
+          if (
+            upgradeError ||
+            upgraded !== true
+          ) {
+
+            throw new Error(
+              upgradeError?.message ||
+              'Your ID matched, but the account could not be upgraded.'
+            );
+          }
+
+
+          // Purpose:
+          // Confirms Supabase now considers this account
+          // verified before returning the user to Home.
+          const {
+            data: verifiedProfile,
+            error: profileError,
+          } =
+            await supabase
+              .from(
+                'user_onboarding'
+              )
+              .select(
+                'account_access_mode, id_verification_status'
+              )
+              .eq(
+                'user_id',
+                existingUser.id
+              )
+              .single();
+
+
+          if (profileError) {
+
+            throw new Error(
+              profileError.message
+            );
+          }
+
+
+          if (
+            verifiedProfile?.account_access_mode !==
+              'verified' ||
+            verifiedProfile?.id_verification_status !==
+              'verified'
+          ) {
+
+            throw new Error(
+              'ID verification succeeded, but verified account access was not saved.'
+            );
+          }
+
+
+          console.log(
+            '[CHECK ID] Account confirmed VERIFIED in Supabase.'
+          );
+
+
+          router.replace(
+            '/home-backup'
+          );
+
+          return;
+        }
+
+
+        // Purpose:
+        // A user who has not created an account yet keeps
+        // the secure ticket locally until Signup consumes it.
+        await saveOnboardingVerificationTicket(
+          result.verificationTicket
         );
 
+
+        console.log(
+          '[CHECK ID] Pre-signup ID verified. Opening onboarding_success...'
+        );
+
+
         router.replace({
-          pathname: '/onboarding_success',
+          pathname:
+            '/onboarding_success',
+
           params: {
+
             firstName,
             lastName,
             displayName,
@@ -539,8 +756,17 @@ export default function OnboardingCheckId() {
             city,
             state,
             country,
+
+            questionnaireAnswers,
+
+            accountAccessMode:
+              'verified',
+
+            idVerificationStatus:
+              'verified',
           },
         });
+
 
         return;
       }

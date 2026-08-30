@@ -62,8 +62,8 @@ if (
   !idVerifySupabaseUrl ||
   !idVerifySupabaseAnonKey
 ) {
-  throw new Error(
-    'Missing ID verification Supabase environment variables'
+  console.warn(
+    'ID verification Supabase is not configured. ID verification will be unavailable.'
   );
 }
 
@@ -134,21 +134,17 @@ export const supabase = createClient(
 //
 // ======================================================
 
-export const idVerifySupabase = createClient(
-  idVerifySupabaseUrl,
-  idVerifySupabaseAnonKey,
-  {
-    auth: {
-
-      // ==================================================
-      // PRE-ACCOUNT VERIFICATION
-      // ==================================================
-
-      persistSession: false,
-
-      autoRefreshToken: false,
-
-      detectSessionInUrl: false,
-    },
-  }
-);
+export const idVerifySupabase =
+  idVerifySupabaseUrl && idVerifySupabaseAnonKey
+    ? createClient(
+        idVerifySupabaseUrl,
+        idVerifySupabaseAnonKey,
+        {
+          auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+            detectSessionInUrl: false,
+          },
+        }
+      )
+    : null;

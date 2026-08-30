@@ -6,35 +6,46 @@ export type Coordinate = {
 const EARTH_RADIUS_METERS = 6_371_000;
 const FEET_PER_METER = 3.280_839_895;
 
+// Purpose: Implements the degrees to radians operation.
 function degreesToRadians(degrees: number) {
   return degrees * (Math.PI / 180);
 }
 
 /** Returns the great-circle distance between two coordinates in meters. */
+// Purpose: Calculates distance meters.
 export function calculateDistanceMeters(from: Coordinate, to: Coordinate) {
   const latitudeDelta = degreesToRadians(to.latitude - from.latitude);
   const longitudeDelta = degreesToRadians(to.longitude - from.longitude);
   const fromLatitude = degreesToRadians(from.latitude);
   const toLatitude = degreesToRadians(to.latitude);
 
-  const haversine =
+  const rawHaversine =
     Math.sin(latitudeDelta / 2) ** 2 +
     Math.cos(fromLatitude) *
       Math.cos(toLatitude) *
       Math.sin(longitudeDelta / 2) ** 2;
 
-  const centralAngle = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+  // Protect against tiny floating-point overflow.
+  const haversine = Math.max(0, Math.min(1, rawHaversine));
+
+  const centralAngle =
+    2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 
   return EARTH_RADIUS_METERS * centralAngle;
 }
 
+// Purpose: Implements the feet to meters operation.
 export function feetToMeters(feet: number) {
   return feet / FEET_PER_METER;
 }
 
 /** Formats a metric GPS distance for an imperial, feet-and-inches interface. */
+// Purpose: Formats distance feet and inches.
 export function formatDistanceFeetAndInches(distanceMeters: number) {
-  const totalInches = Math.max(0, Math.round(distanceMeters * FEET_PER_METER * 12));
+  const totalInches = Math.max(
+    0,
+    Math.round(distanceMeters * FEET_PER_METER * 12),
+  );
   const feet = Math.floor(totalInches / 12);
   const inches = totalInches % 12;
 
@@ -42,6 +53,7 @@ export function formatDistanceFeetAndInches(distanceMeters: number) {
 }
 
 /** Returns a coordinate a given number of feet and compass degrees from an origin. */
+// Purpose: Returns coordinate offset by feet.
 export function getCoordinateOffsetByFeet(
   origin: Coordinate,
   distanceFeet: number,

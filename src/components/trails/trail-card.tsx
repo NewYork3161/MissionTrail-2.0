@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { memo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MissionTrailColors as C } from '@/constants/theme';
 import type { Trail } from '@/types/trails';
@@ -10,6 +10,7 @@ type Props = {
   trail: Trail;
   meetupCount: number;
   favorite: boolean;
+  favoriteBusy?: boolean;
   showDistance: boolean;
   selected?: boolean;
   onSelect: () => void;
@@ -20,10 +21,12 @@ type Props = {
 };
 
 // This memoized card summarizes a trail and exposes its main user actions.
+// Purpose: Renders the trail card interface.
 export const TrailCard = memo(function TrailCard({
   trail,
   meetupCount,
   favorite,
+  favoriteBusy = false,
   showDistance,
   selected,
   onSelect,
@@ -37,7 +40,7 @@ export const TrailCard = memo(function TrailCard({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${trail.name}. ${trail.lengthMiles} mile ${trail.activityType} trail.`}
+      accessibilityLabel={`${trail.name}. ${trail.distanceMiles.toFixed(1)} miles away.`}
       onPress={onSelect}
       style={({ pressed }) => [styles.card, selected && styles.selected, pressed && styles.pressed]}
     >
@@ -57,11 +60,14 @@ export const TrailCard = memo(function TrailCard({
           accessibilityRole="button"
           accessibilityLabel={favorite ? `Remove ${trail.name} from saved trails` : `Save ${trail.name}`}
           accessibilityState={{ selected: favorite }}
+          disabled={favoriteBusy}
           hitSlop={8}
           onPress={(event) => { event.stopPropagation(); onToggleFavorite(); }}
-          style={styles.favorite}
+          style={({ pressed }) => [styles.favorite, favoriteBusy && styles.disabled, pressed && styles.pressed]}
         >
-          <Ionicons name={favorite ? 'bookmark' : 'bookmark-outline'} size={21} color={favorite ? C.magenta : C.text} />
+          {favoriteBusy
+            ? <ActivityIndicator size="small" color={C.cyan} />
+            : <Ionicons name={favorite ? 'bookmark' : 'bookmark-outline'} size={21} color={favorite ? C.magenta : C.text} />}
         </Pressable>
         <View style={styles.imageCopy}>
           <Text style={styles.name}>{trail.name}</Text>
@@ -71,14 +77,14 @@ export const TrailCard = memo(function TrailCard({
 
       <View style={styles.body}>
         <View style={styles.factRow}>
-          <Fact icon="resize-outline" value={`${trail.lengthMiles.toFixed(1)} mi`} />
-          <Fact icon="time-outline" value={`${trail.estimatedDurationMinutes} min`} />
+          <Fact icon="resize-outline" value={trail.lengthMiles > 0 ? `${trail.lengthMiles.toFixed(1)} mi` : 'Length n/a'} />
+          <Fact icon="time-outline" value={trail.estimatedDurationMinutes > 0 ? `${trail.estimatedDurationMinutes} min` : 'Time n/a'} />
           <Fact icon="speedometer-outline" value={capitalize(trail.difficulty)} />
-          <Fact icon="star" value={trail.rating.toFixed(1)} accent />
+          <Fact icon="star" value={trail.rating > 0 ? trail.rating.toFixed(1) : 'Unrated'} accent />
         </View>
         <Text style={styles.terrain}>{trail.terrain} · {trail.publicAccess ? 'Public access' : 'Access restricted'}</Text>
         <View style={styles.rewardRow}>
-          <Text style={styles.xp}>POSSIBLE +{trail.xpReward} XP</Text>
+          <Text style={styles.xp}>{trail.xpReward > 0 ? `POSSIBLE +${trail.xpReward} XP` : 'GPS-VERIFIED TRAIL'}</Text>
           <Text style={[styles.relic, !trail.relicsPossible && styles.muted]}>
             {trail.relicsPossible ? '✦ Relics may appear' : 'No relic data'}
           </Text>
@@ -96,11 +102,13 @@ export const TrailCard = memo(function TrailCard({
 });
 
 // Displays a compact icon-and-value fact inside the trail card.
+// Purpose: Renders the fact interface.
 function Fact({ icon, value, accent }: { icon: keyof typeof Ionicons.glyphMap; value: string; accent?: boolean }) {
   return <View style={styles.fact}><Ionicons name={icon} size={14} color={accent ? C.warning : C.cyan} /><Text style={styles.factText}>{value}</Text></View>;
 }
 
 // Creates a consistent card button and stops its tap from selecting the whole card.
+// Purpose: Renders the action interface.
 function Action({ label, onPress, primary, disabled }: { label: string; onPress: () => void; primary?: boolean; disabled?: boolean }) {
   return (
     <Pressable
@@ -116,6 +124,7 @@ function Action({ label, onPress, primary, disabled }: { label: string; onPress:
 }
 
 // Converts a stored lowercase label into display text.
+// Purpose: Implements the capitalize operation.
 function capitalize(value: string) { return value.charAt(0).toUpperCase() + value.slice(1); }
 
 const styles = StyleSheet.create({

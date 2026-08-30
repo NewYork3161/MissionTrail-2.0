@@ -107,6 +107,238 @@ function jsonResponse(
 }
 
 // ======================================================
+// VERIFICATION TICKET IDENTITY
+// ======================================================
+
+type VerificationTicketIdentity = {
+  firstName: string;
+  lastName: string;
+  birthday: string;
+};
+
+
+// ======================================================
+// NORMALIZE TICKET IDENTITY
+// ======================================================
+
+// Purpose:
+// Normalizes identity text exactly like the signup
+// database trigger so a ticket can only be used with
+// the onboarding identity that earned it.
+function normalizeTicketIdentityValue(
+  value: string,
+): string {
+  return value
+    .trim()
+    .toLowerCase();
+}
+
+
+// ======================================================
+// RANDOM BYTES -> URL SAFE TOKEN
+// ======================================================
+
+// Purpose:
+// Converts cryptographically random bytes into a
+// URL-safe secret string that can be carried to Signup.
+function bytesToBase64Url(
+  bytes: Uint8Array,
+): string {
+
+  const binary =
+    String.fromCharCode(
+      ...bytes,
+    );
+
+
+  return btoa(binary)
+    .replace(
+      /\+/g,
+      "-",
+    )
+    .replace(
+      /\//g,
+      "_",
+    )
+    .replace(
+      /=+$/g,
+      "",
+    );
+}
+
+
+// ======================================================
+// SHA-256
+// ======================================================
+
+// Purpose:
+// Hashes the secret verification ticket before storage.
+// Only the hash is stored in Supabase.
+async function sha256Hex(
+  value: string,
+): Promise<string> {
+
+  const encoded =
+    new TextEncoder()
+      .encode(value);
+
+
+  const digest =
+    await crypto.subtle.digest(
+      "SHA-256",
+      encoded,
+    );
+
+
+  return Array.from(
+    new Uint8Array(
+      digest,
+    ),
+  )
+    .map(
+      (byte) =>
+        byte
+          .toString(16)
+          .padStart(
+            2,
+            "0",
+          ),
+    )
+    .join("");
+}
+
+
+// ======================================================
+// CREATE VERIFICATION TICKET
+// ======================================================
+
+// Purpose:
+// Generates a one-time 256-bit verification ticket,
+// stores only its SHA-256 hash in Supabase, and returns
+// the raw ticket once to the verified onboarding client.
+async function createVerificationTicket(
+  identity: VerificationTicketIdentity,
+): Promise<string> {
+
+  // Purpose:
+  // Reads trusted Supabase credentials that exist only
+  // inside the deployed Edge Function environment.
+  const supabaseUrl =
+    Deno.env.get(
+      "SUPABASE_URL",
+    );
+
+  const serviceRoleKey =
+    Deno.env.get(
+      "SUPABASE_SERVICE_ROLE_KEY",
+    );
+
+
+  if (
+    !supabaseUrl ||
+    !serviceRoleKey
+  ) {
+    throw new Error(
+      "Secure verification ticket service is not configured.",
+    );
+  }
+
+
+  // Purpose:
+  // Creates 32 cryptographically random bytes.
+  // 32 bytes = 256 bits of ticket entropy.
+  const randomBytes =
+    new Uint8Array(32);
+
+  crypto.getRandomValues(
+    randomBytes,
+  );
+
+
+  const rawTicket =
+    bytesToBase64Url(
+      randomBytes,
+    );
+
+
+  const tokenHash =
+    await sha256Hex(
+      rawTicket,
+    );
+
+
+  // Purpose:
+  // Stores only the ticket hash and the identity that
+  // successfully passed the onboarding information match.
+  const insertResponse =
+    await fetch(
+      `${supabaseUrl}/rest/v1/onboarding_verification_tickets`,
+      {
+        method:
+          "POST",
+
+        headers: {
+          apikey:
+            serviceRoleKey,
+
+          Authorization:
+            `Bearer ${serviceRoleKey}`,
+
+          "Content-Type":
+            "application/json",
+
+          Prefer:
+            "return=minimal",
+        },
+
+        body:
+          JSON.stringify({
+            token_hash:
+              tokenHash,
+
+            first_name_norm:
+              normalizeTicketIdentityValue(
+                identity.firstName,
+              ),
+
+            last_name_norm:
+              normalizeTicketIdentityValue(
+                identity.lastName,
+              ),
+
+            birthday_norm:
+              normalizeTicketIdentityValue(
+                identity.birthday,
+              ),
+          }),
+      },
+    );
+
+
+  if (!insertResponse.ok) {
+
+    const databaseMessage =
+      await insertResponse.text();
+
+
+    console.error(
+      "Unable to store verification ticket:",
+      insertResponse.status,
+      databaseMessage,
+    );
+
+
+    throw new Error(
+      "Verification ticket could not be created.",
+    );
+  }
+
+
+  return rawTicket;
+}
+
+
+// ======================================================
 // CLEAN STRING
 // ======================================================
 
@@ -410,13 +642,20 @@ Deno.serve(async (req: Request) => {
             ),
           );
 
+        // Purpose:
+        // Keeps the original onboarding birthday for the
+        // secure signup ticket while also creating the
+        // normalized date used by ID comparison.
+        const birthdayInput =
+          cleanString(
+            formData.get(
+              "birthday",
+            ),
+          );
+
         const birthday =
           normalizeDate(
-            cleanString(
-              formData.get(
-                "birthday",
-              ),
-            ),
+            birthdayInput,
           );
 
         const city =
@@ -503,6 +742,30 @@ Deno.serve(async (req: Request) => {
             400,
           );
         }
+
+        // ==================================================
+        // EMPTY IMAGE
+        // ==================================================
+
+        if (idImage.size === 0) {
+          console.error(
+            "ID image upload contained zero bytes.",
+          );
+
+          return jsonResponse(
+            {
+              success: false,
+              status: "unable_to_verify",
+              errorType: "image_error",
+              message:
+                "The uploaded ID image was empty. Please take or select the photo again.",
+              informationMatched: false,
+              requiresManualReview: true,
+            },
+            400,
+          );
+        }
+
 
         // ==================================================
         // IMAGE TYPE
@@ -963,11 +1226,80 @@ requiresManualReview = true
         }
 
         // ==================================================
+        // SECURE VERIFIED SIGNUP TICKET
+        // ==================================================
+
+        let verificationTicket:
+          string | null =
+          null;
+
+
+        // Purpose:
+        // Issues the one-time signup ticket only after
+        // the server has determined that the submitted
+        // onboarding information matches the visible ID.
+        if (
+          verificationStatus ===
+          "matched"
+        ) {
+
+          try {
+
+            verificationTicket =
+              await createVerificationTicket(
+                {
+                  firstName,
+                  lastName,
+                  birthday:
+                    birthdayInput,
+                },
+              );
+
+          } catch (ticketError) {
+
+            console.error(
+              "Unable to issue verification ticket:",
+              ticketError,
+            );
+
+
+            // Purpose:
+            // Never returns a successful verified result
+            // unless the secure proof ticket was created.
+            return jsonResponse(
+              {
+                success: false,
+
+                status:
+                  "error",
+
+                errorType:
+                  "ticket_error",
+
+                message:
+                  "Your ID information matched, but secure account verification could not be completed. Please try again.",
+
+                informationMatched:
+                  true,
+
+                requiresManualReview:
+                  false,
+              },
+              500,
+            );
+          }
+        }
+
+
+        // ==================================================
         // RETURN RESULT
         // ==================================================
         //
-        // There is intentionally NO database update here.
-        // The user does not have an account/user_id yet.
+        // There is still no user_onboarding update here because
+        // the person does not have an account/user_id yet.
+        //
+        // A successful match now creates only a short-lived,
+        // single-use verification ticket for account creation.
         //
         // The client should:
         //
@@ -995,6 +1327,15 @@ requiresManualReview = true
                     "mismatch"
                   ? "Some information on the ID does not match the onboarding information."
                   : "The ID could not be verified automatically.",
+
+            // Purpose:
+            // Returns the raw ticket once. Mismatch and
+            // unreadable results never receive a ticket.
+            verificationTicket:
+              verificationStatus ===
+              "matched"
+                ? verificationTicket
+                : null,
 
             informationMatched:
               aiResult.informationMatched,

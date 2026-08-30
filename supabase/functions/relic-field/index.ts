@@ -1,35 +1,43 @@
-import { createClient } from 'npm:@supabase/supabase-js@2.106.2';
+import { createClient } from "npm:@supabase/supabase-js@2.106.2";
 
+import { isDevelopmentRelicTestUser } from "../_shared/daily-config.ts";
 import {
   createMysteryZone,
   decodeGeohashCenter,
-  deterministicIndex,
   destinationPoint,
+  deterministicIndex,
   distanceMeters,
   encodeGeohash,
   generateDeterministicCandidates,
   hmacDigest,
   selectDeterministicSafeLocations,
   type Coordinate,
-} from '../_shared/spawn-algorithm.ts';
-import { isDevelopmentRelicTestUser } from '../_shared/daily-config.ts';
+} from "../_shared/spawn-algorithm.ts";
 import {
   ALLOW_UNVERIFIED_SPAWNS,
-  CANDIDATES_PER_WINDOW,
+  AMBIENT_CLUE_DISTANCE_BANDS_METERS,
+  AMBIENT_ENABLED,
   CLUE_DISTANCE_BANDS_METERS,
   EXPIRATION_GRACE_PERIOD_SECONDS,
   EXPLORATION_REGION_GEOHASH_PRECISION,
   FIELD_RATE_LIMIT_PER_MINUTE,
+  LOCAL_CANDIDATES,
+  LOCAL_MIN_SPACING_METERS,
+  LOCAL_RADIUS_METERS,
   MAX_ACCEPTABLE_GPS_ACCURACY_METERS,
-  MIN_CANDIDATE_SPACING_METERS,
-  SEARCH_RADIUS_METERS,
-  SPAWN_WINDOW_MINUTES,
+  NEIGHBORHOOD_CANDIDATES,
+  NEIGHBORHOOD_MIN_SPACING_METERS,
+  NEIGHBORHOOD_RADIUS_METERS,
+  REGIONAL_CANDIDATES,
+  REGIONAL_MIN_SPACING_METERS,
+  REGIONAL_RADIUS_METERS,
   REQUIRED_ACCURATE_READINGS,
   requireSpawnHmacSecret,
-} from '../_shared/spawn-config.ts';
+  SPAWN_WINDOW_MINUTES,
+} from "../_shared/spawn-config.ts";
 
 type FieldRequest = {
-  action?: 'list' | 'place_test_relic';
+  action?: "list" | "place_test_relic";
   locationReadings?: Array<{
     latitude?: number;
     longitude?: number;
@@ -37,12 +45,12 @@ type FieldRequest = {
     capturedAt?: string;
     mocked?: boolean;
   }>;
-  provider?: 'gps' | 'development_mock';
+  provider?: "gps" | "development_mock";
 };
 
 type CatalogRelic = {
   relic_id: string;
-  rarity: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
+  rarity: "common" | "uncommon" | "rare" | "epic" | "legendary";
 };
 
 type WindowRecord = {
@@ -68,22 +76,64 @@ type CandidateRecord = {
   rarity: string;
   latitude: number;
   longitude: number;
-  safety_status: 'verified' | 'unverified';
+  safety_status: "verified" | "verified_vicinity" | "unverified";
+  spawn_tier: SpawnTierName;
 };
+
+type SpawnTierName = "ambient" | "neighborhood" | "local" | "regional";
+
+type SpawnTier = {
+  name: SpawnTierName;
+  minimumDistanceMeters: number;
+  maximumDistanceMeters: number;
+  count: number;
+  minimumSpacingMeters: number;
+  slotOffset: number;
+};
+
+const SPAWN_TIERS: SpawnTier[] = [
+  {
+    name: "neighborhood",
+    minimumDistanceMeters: 0,
+    maximumDistanceMeters: NEIGHBORHOOD_RADIUS_METERS,
+    count: NEIGHBORHOOD_CANDIDATES,
+    minimumSpacingMeters: NEIGHBORHOOD_MIN_SPACING_METERS,
+    slotOffset: 2_000,
+  },
+  {
+    name: "local",
+    minimumDistanceMeters: NEIGHBORHOOD_RADIUS_METERS,
+    maximumDistanceMeters: LOCAL_RADIUS_METERS,
+    count: LOCAL_CANDIDATES,
+    minimumSpacingMeters: LOCAL_MIN_SPACING_METERS,
+    slotOffset: 3_000,
+  },
+  {
+    name: "regional",
+    minimumDistanceMeters: LOCAL_RADIUS_METERS,
+    maximumDistanceMeters: REGIONAL_RADIUS_METERS,
+    count: REGIONAL_CANDIDATES,
+    minimumSpacingMeters: REGIONAL_MIN_SPACING_METERS,
+    slotOffset: 4_000,
+  },
+];
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, apikey, content-type, x-client-info",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+// Purpose: Implements the json response operation.
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
 
+// Purpose: Implements the require server environment operation.
 function requireServerEnvironment(name: string) {
   const value = Deno.env.get(name);
 
@@ -94,15 +144,17 @@ function requireServerEnvironment(name: string) {
   return value;
 }
 
+// Purpose: Determines whether is coordinate.
 function isCoordinate(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
+  return typeof value === "number" && Number.isFinite(value);
 }
 
+// Purpose: Validates anchor readings.
 function validateAnchorReadings(body: FieldRequest) {
   const readings = body.locationReadings?.slice(-REQUIRED_ACCURATE_READINGS);
 
   if (!readings || readings.length < REQUIRED_ACCURATE_READINGS) {
-    throw new Error('INVALID_ANCHOR');
+    throw new Error("INVALID_ANCHOR");
   }
 
   const serverNow = Date.now();
@@ -112,7 +164,9 @@ function validateAnchorReadings(body: FieldRequest) {
     const latitude = reading.latitude;
     const longitude = reading.longitude;
     const accuracyMeters = reading.accuracyMeters;
-    const capturedAt = reading.capturedAt ? Date.parse(reading.capturedAt) : Number.NaN;
+    const capturedAt = reading.capturedAt
+      ? Date.parse(reading.capturedAt)
+      : Number.NaN;
 
     if (
       !isCoordinate(latitude) ||
@@ -127,70 +181,93 @@ function validateAnchorReadings(body: FieldRequest) {
       !Number.isFinite(capturedAt) ||
       capturedAt <= previousTimestamp ||
       (previousTimestamp > 0 &&
-        (capturedAt - previousTimestamp < 1_000 || capturedAt - previousTimestamp > 10_000)) ||
+        (capturedAt - previousTimestamp < 1_000 ||
+          capturedAt - previousTimestamp > 10_000)) ||
       capturedAt < serverNow - 30_000 ||
       capturedAt > serverNow + 5_000 ||
-      (reading.mocked === true && body.provider !== 'development_mock')
+      (reading.mocked === true && body.provider !== "development_mock")
     ) {
-      throw new Error('INVALID_ANCHOR');
+      throw new Error("INVALID_ANCHOR");
     }
 
     previousTimestamp = capturedAt;
     return { latitude, longitude, accuracyMeters };
   });
 
-  const latitude = [...accepted].sort((left, right) => left.latitude - right.latitude)[
-    Math.floor(accepted.length / 2)
-  ].latitude;
-  const longitude = [...accepted].sort((left, right) => left.longitude - right.longitude)[
-    Math.floor(accepted.length / 2)
-  ].longitude;
+  const latitude = [...accepted].sort(
+    (left, right) => left.latitude - right.latitude,
+  )[Math.floor(accepted.length / 2)].latitude;
+  const longitude = [...accepted].sort(
+    (left, right) => left.longitude - right.longitude,
+  )[Math.floor(accepted.length / 2)].longitude;
   const median = { latitude, longitude };
 
   if (
     accepted.some(
       (reading) =>
-        distanceMeters(median, reading) > MAX_ACCEPTABLE_GPS_ACCURACY_METERS * 2,
+        distanceMeters(median, reading) >
+        MAX_ACCEPTABLE_GPS_ACCURACY_METERS * 2,
     )
   ) {
-    throw new Error('INVALID_ANCHOR');
+    throw new Error("INVALID_ANCHOR");
   }
 
   return {
     coordinate: median,
-    maximumAccuracyMeters: Math.max(...accepted.map((reading) => reading.accuracyMeters)),
+    maximumAccuracyMeters: Math.max(
+      ...accepted.map((reading) => reading.accuracyMeters),
+    ),
   };
 }
 
+// Purpose: Implements the choose relic operation.
 async function chooseRelic(
   secret: string,
   regionGeohash: string,
   windowId: number,
   slotIndex: number,
   catalog: CatalogRelic[],
+  tier: SpawnTierName,
 ) {
   const rarityRoll = await deterministicIndex(
     secret,
     `rarity|${regionGeohash}|${windowId}|${slotIndex}`,
     100,
   );
-  // Common, Uncommon, and Epic are normal tiers. Rare and Legendary candidates
-  // are filtered by the database's server-derived daily eligibility.
-  const desiredRarity = slotIndex === 0 || rarityRoll < 35
-    ? 'common'
-    : rarityRoll < 60
-      ? 'uncommon'
-      : rarityRoll < 80
-        ? 'epic'
-        : rarityRoll < 92
-          ? 'rare'
-          : 'legendary';
-  const desiredCatalog = catalog.filter((relic) => relic.rarity === desiredRarity);
-  // Existing Mission Trails artwork currently has no Common/Uncommon entries,
-  // so Epic is the safe normal-tier fallback until those catalog rows are added.
+  // Ambient never rolls a gated rarity. Wider tiers progressively introduce
+  // Epic, Rare, and Legendary opportunities; database eligibility still decides
+  // whether special assignments are available to this user.
+  const desiredRarity = tier === "ambient"
+    ? rarityRoll < 70 ? "common" : "uncommon"
+    : tier === "neighborhood"
+      ? rarityRoll < 55 ? "common" : rarityRoll < 85 ? "uncommon" : "epic"
+      : tier === "local"
+        ? rarityRoll < 40
+          ? "common"
+          : rarityRoll < 70
+            ? "uncommon"
+            : rarityRoll < 90
+              ? "epic"
+              : "rare"
+        : rarityRoll < 25
+          ? "common"
+          : rarityRoll < 50
+            ? "uncommon"
+            : rarityRoll < 70
+              ? "epic"
+              : rarityRoll < 88
+                ? "rare"
+                : "legendary";
+  const desiredCatalog = catalog.filter(
+    (relic) => relic.rarity === desiredRarity,
+  );
   const eligibleCatalog = desiredCatalog.length
     ? desiredCatalog
-    : catalog.filter((relic) => relic.rarity === 'epic');
+    : catalog.filter((relic) =>
+        tier === "ambient"
+          ? relic.rarity === "common" || relic.rarity === "uncommon"
+          : relic.rarity === "epic"
+      );
   const relicIndex = await deterministicIndex(
     secret,
     `relic|${regionGeohash}|${windowId}|${slotIndex}`,
@@ -203,34 +280,37 @@ async function chooseRelic(
 Deno.serve(async (request) => {
   const requestId = crypto.randomUUID();
 
-  if (request.method === 'OPTIONS') {
+  if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  if (request.method !== 'POST') {
-    return jsonResponse({ error: 'METHOD_NOT_ALLOWED', requestId }, 405);
+  if (request.method !== "POST") {
+    return jsonResponse({ error: "METHOD_NOT_ALLOWED", requestId }, 405);
   }
 
   try {
-    const authorization = request.headers.get('Authorization');
+    const authorization = request.headers.get("Authorization");
 
-    if (!authorization?.startsWith('Bearer ')) {
-      return jsonResponse({ error: 'UNAUTHORIZED', requestId }, 401);
+    if (!authorization?.startsWith("Bearer ")) {
+      return jsonResponse({ error: "UNAUTHORIZED", requestId }, 401);
     }
 
-    const supabaseUrl = requireServerEnvironment('SUPABASE_URL');
-    const anonKey = requireServerEnvironment('SUPABASE_ANON_KEY');
-    const serviceRoleKey = requireServerEnvironment('SUPABASE_SERVICE_ROLE_KEY');
+    const supabaseUrl = requireServerEnvironment("SUPABASE_URL");
+    const anonKey = requireServerEnvironment("SUPABASE_ANON_KEY");
+    const serviceRoleKey = requireServerEnvironment(
+      "SUPABASE_SERVICE_ROLE_KEY",
+    );
     const spawnSecret = requireSpawnHmacSecret();
 
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authorization } },
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    const { data: authData, error: authError } = await userClient.auth.getUser();
+    const { data: authData, error: authError } =
+      await userClient.auth.getUser();
 
     if (authError || !authData.user) {
-      return jsonResponse({ error: 'UNAUTHORIZED', requestId }, 401);
+      return jsonResponse({ error: "UNAUTHORIZED", requestId }, 401);
     }
 
     const admin = createClient(supabaseUrl, serviceRoleKey, {
@@ -238,73 +318,87 @@ Deno.serve(async (request) => {
     });
 
     const { data: rateAllowed, error: rateError } = await admin.rpc(
-      'server_consume_field_rate_limit',
+      "server_consume_field_rate_limit",
       {
         p_subject_key: `user:${authData.user.id}`,
-        p_endpoint: 'relic-field',
+        p_endpoint: "relic-field",
         p_limit: FIELD_RATE_LIMIT_PER_MINUTE,
       },
     );
 
-    if (rateError) throw new Error('RATE_LIMIT_CHECK_FAILED');
-    if (!rateAllowed) return jsonResponse({ error: 'RATE_LIMITED', requestId }, 429);
+    if (rateError) throw new Error("RATE_LIMIT_CHECK_FAILED");
+    if (!rateAllowed)
+      return jsonResponse({ error: "RATE_LIMITED", requestId }, 429);
 
     const body = (await request.json().catch(() => ({}))) as FieldRequest;
-    const provider = body.provider ?? 'gps';
+    const provider = body.provider ?? "gps";
 
-    if (body.action === 'place_test_relic' && !isDevelopmentRelicTestUser(authData.user.id)) {
-      return jsonResponse({
-        error: 'DEVELOPMENT_TEST_DISABLED', requestId,
-        message: 'Test relic setup is turned off for this account.',
-      }, 403);
-    }
-
-    if (provider === 'development_mock' && !ALLOW_UNVERIFIED_SPAWNS) {
-      return jsonResponse({ error: 'DEVELOPMENT_PROVIDER_DISABLED', requestId }, 403);
-    }
-
-    let { data: zoneRows, error: zoneError } = await admin.rpc(
-      'server_get_active_exploration_zone',
-      { p_user_id: authData.user.id },
-    );
-
-    if (!zoneError && !zoneRows?.length) {
-      // A new zone requires consecutive fresh, accurate readings. Once created,
-      // later movement is ignored until the stable zone expires.
-      const anchorResult = validateAnchorReadings(body);
-      const anchor = anchorResult.coordinate;
-      const requestedRegion = encodeGeohash(anchor, EXPLORATION_REGION_GEOHASH_PRECISION);
-      const requestedRegionCenter = decodeGeohashCenter(requestedRegion);
-      const anchorDigest = await hmacDigest(
-        spawnSecret,
-        `zone-anchor|${authData.user.id}|${body.locationReadings
-          ?.slice(-REQUIRED_ACCURATE_READINGS)
-          .map((reading) => reading.capturedAt)
-          .join('|')}`,
+    if (
+      body.action === "place_test_relic" &&
+      !isDevelopmentRelicTestUser(authData.user.id)
+    ) {
+      return jsonResponse(
+        {
+          error: "DEVELOPMENT_TEST_DISABLED",
+          requestId,
+          message: "Test relic setup is turned off for this account.",
+        },
+        403,
       );
-      const anchorAttempt = await admin.rpc('server_record_zone_anchor_attempt', {
+    }
+
+    if (provider === "development_mock" && !ALLOW_UNVERIFIED_SPAWNS) {
+      return jsonResponse(
+        { error: "DEVELOPMENT_PROVIDER_DISABLED", requestId },
+        403,
+      );
+    }
+
+    // Every field request proves a current anchor. The database keeps the old
+    // zone only while a reveal/collection flow is protected by its grace period.
+    const anchorResult = validateAnchorReadings(body);
+    const anchor = anchorResult.coordinate;
+    const requestedRegion = encodeGeohash(
+      anchor,
+      EXPLORATION_REGION_GEOHASH_PRECISION,
+    );
+    const requestedRegionCenter = decodeGeohashCenter(requestedRegion);
+    const anchorDigest = await hmacDigest(
+      spawnSecret,
+      `zone-anchor|${authData.user.id}|${body.locationReadings
+        ?.slice(-REQUIRED_ACCURATE_READINGS)
+        .map((reading) => reading.capturedAt)
+        .join("|")}`,
+    );
+    const anchorAttempt = await admin.rpc(
+      "server_record_zone_anchor_attempt",
+      {
         p_user_id: authData.user.id,
         p_latitude: anchor.latitude,
         p_longitude: anchor.longitude,
         p_reading_count: REQUIRED_ACCURATE_READINGS,
         p_maximum_accuracy_meters: anchorResult.maximumAccuracyMeters,
         p_payload_digest: anchorDigest,
-      });
+      },
+    );
 
-      if (anchorAttempt.error) throw new Error('ANCHOR_VERIFICATION_FAILED');
+    if (anchorAttempt.error) throw new Error("ANCHOR_VERIFICATION_FAILED");
 
-      const createdZone = await admin.rpc('server_get_or_create_exploration_zone', {
+    const { data: zoneRows, error: zoneError } = await admin.rpc(
+      "server_get_or_create_exploration_zone",
+      {
         p_user_id: authData.user.id,
         p_region_geohash: requestedRegion,
         p_center_latitude: requestedRegionCenter.latitude,
         p_center_longitude: requestedRegionCenter.longitude,
-        p_anchor_source: provider === 'development_mock' ? 'development_mock' : 'verified_gps',
-      });
-      zoneRows = createdZone.data;
-      zoneError = createdZone.error;
-    }
+        p_anchor_source:
+          provider === "development_mock"
+            ? "development_mock"
+            : "verified_gps",
+      },
+    );
 
-    if (zoneError || !zoneRows?.[0]) throw new Error('ZONE_UNAVAILABLE');
+    if (zoneError || !zoneRows?.[0]) throw new Error("ZONE_UNAVAILABLE");
     const zone = zoneRows[0] as ZoneRecord;
     const zoneCenter: Coordinate = {
       latitude: zone.center_latitude,
@@ -314,7 +408,7 @@ Deno.serve(async (request) => {
     // The database calculates this from clock_timestamp(). The client never sends
     // a window ID or clock value and therefore cannot hold a window open.
     const { data: windowRows, error: windowError } = await admin.rpc(
-      'server_get_or_create_current_spawn_window',
+      "server_get_or_create_current_spawn_window",
       {
         p_region_geohash: zone.region_geohash,
         p_center_latitude: zoneCenter.latitude,
@@ -324,12 +418,12 @@ Deno.serve(async (request) => {
       },
     );
 
-    if (windowError || !windowRows?.[0]) throw new Error('WINDOW_UNAVAILABLE');
+    if (windowError || !windowRows?.[0]) throw new Error("WINDOW_UNAVAILABLE");
     const spawnWindow = windowRows[0] as WindowRecord;
 
-    await admin.rpc('server_expire_old_relic_assignments');
+    await admin.rpc("server_expire_old_relic_assignments");
 
-    if (body.action === 'place_test_relic') {
+    if (body.action === "place_test_relic") {
       const anchor = validateAnchorReadings(body).coordinate;
       const bearing = await deterministicIndex(
         spawnSecret,
@@ -347,18 +441,19 @@ Deno.serve(async (request) => {
         clueDistanceBandsMeters: CLUE_DISTANCE_BANDS_METERS,
       });
       const { data: testCatalog, error: testCatalogError } = await admin
-        .from('relic_catalog')
-        .select('relic_id')
-        .eq('is_enabled', true)
-        .eq('rarity', 'epic')
-        .order('relic_id')
+        .from("relic_catalog")
+        .select("relic_id")
+        .eq("is_enabled", true)
+        .eq("rarity", "epic")
+        .order("relic_id")
         .limit(1);
-      if (testCatalogError || !testCatalog?.[0]) throw new Error('TEST_RELIC_UNAVAILABLE');
+      if (testCatalogError || !testCatalog?.[0])
+        throw new Error("TEST_RELIC_UNAVAILABLE");
       const seedDigest = await hmacDigest(
         spawnSecret,
         `development-test-audit|${authData.user.id}|${spawnWindow.window_id}|${requestId}`,
       );
-      const placed = await admin.rpc('server_place_development_test_relic', {
+      const placed = await admin.rpc("server_place_development_test_relic", {
         p_user_id: authData.user.id,
         p_zone_id: zone.zone_id,
         p_spawn_window_id: spawnWindow.spawn_window_id,
@@ -371,131 +466,203 @@ Deno.serve(async (request) => {
         p_clue_distance_band_meters: mystery.clueBandMeters,
         p_seed_digest: seedDigest,
       });
-      if (placed.error || !placed.data) throw new Error('TEST_RELIC_PLACEMENT_FAILED');
+      if (placed.error || !placed.data)
+        throw new Error("TEST_RELIC_PLACEMENT_FAILED");
       return jsonResponse({
         requestId,
-        status: 'placed',
+        status: "placed",
         assignmentId: placed.data,
-        message: 'Test relic placed 5 feet away. Tap Find Hidden Relic!',
+        message: "Test relic placed 5 feet away. Tap Find Hidden Relic!",
       });
     }
 
     let { data: candidateRows, error: candidateError } = await admin.rpc(
-      'server_list_spawn_candidates',
-      { p_spawn_window_id: spawnWindow.spawn_window_id },
+      "server_list_spawn_candidates",
+      {
+        p_spawn_window_id: spawnWindow.spawn_window_id,
+        p_user_id: authData.user.id,
+      },
     );
 
-    if (candidateError) throw new Error('CANDIDATES_UNAVAILABLE');
+    if (candidateError) throw new Error("CANDIDATES_UNAVAILABLE");
 
-    if ((candidateRows?.length ?? 0) < CANDIDATES_PER_WINDOW) {
+    const existingCandidates = (candidateRows ?? []) as CandidateRecord[];
+    const missingTierCandidates = SPAWN_TIERS.some(
+      (tier) =>
+        existingCandidates.filter(
+          (candidate) => candidate.spawn_tier === tier.name,
+        ).length < tier.count,
+    );
+    const missingAmbientCandidate = AMBIENT_ENABLED && !existingCandidates.some(
+      (candidate) => candidate.spawn_tier === "ambient",
+    );
+
+    if (missingTierCandidates || missingAmbientCandidate) {
       const { data: catalogData, error: catalogError } = await admin
-        .from('relic_catalog')
-        .select('relic_id, rarity')
-        .eq('is_enabled', true)
-        .order('relic_id');
+        .from("relic_catalog")
+        .select("relic_id, rarity")
+        .eq("is_enabled", true)
+        .order("relic_id");
 
-      if (catalogError || !catalogData?.length) throw new Error('CATALOG_UNAVAILABLE');
+      if (catalogError || !catalogData?.length)
+        throw new Error("CATALOG_UNAVAILABLE");
       const catalog = catalogData as CatalogRelic[];
 
-      const { data: safeLocationRows, error: safeLocationError } = await admin.rpc(
-        'server_get_safe_spawn_locations',
-        {
-          p_region_geohash: zone.region_geohash,
-          p_center_latitude: zoneCenter.latitude,
-          p_center_longitude: zoneCenter.longitude,
-          p_radius_meters: SEARCH_RADIUS_METERS,
-        },
-      );
-
-      if (safeLocationError) throw new Error('SAFE_LOCATION_LOOKUP_FAILED');
-
-      const safeLocations = (safeLocationRows ?? []).map((location: {
-        safe_location_id: string;
-        latitude: number;
-        longitude: number;
-      }) => ({
-        id: location.safe_location_id,
-        latitude: location.latitude,
-        longitude: location.longitude,
-      }));
-      const selectedSafeLocations = await selectDeterministicSafeLocations({
-        secret: spawnSecret,
-        regionGeohash: zone.region_geohash,
-        windowId: String(spawnWindow.window_id),
-        locations: safeLocations,
-        count: CANDIDATES_PER_WINDOW,
-        minimumSpacingMeters: MIN_CANDIDATE_SPACING_METERS,
-      });
-
-      const generatedLocations =
-        selectedSafeLocations.length === CANDIDATES_PER_WINDOW
-          ? selectedSafeLocations.map((location) => ({ ...location, safeLocationId: location.id }))
-          : ALLOW_UNVERIFIED_SPAWNS
-            ? (
-                await generateDeterministicCandidates({
-                  secret: spawnSecret,
-                  regionGeohash: zone.region_geohash,
-                  windowId: String(spawnWindow.window_id),
-                  center: zoneCenter,
-                  count: CANDIDATES_PER_WINDOW,
-                  searchRadiusMeters: SEARCH_RADIUS_METERS,
-                  minimumSpacingMeters: MIN_CANDIDATE_SPACING_METERS,
-                })
-              ).map((location) => ({ ...location, safeLocationId: null }))
-            : [];
-
-      if (!generatedLocations.length) {
-        const refreshAfterSeconds = Math.max(
-          1,
-          Math.ceil((Date.parse(spawnWindow.ends_at) - Date.now()) / 1_000),
-        );
-        return jsonResponse({
-          requestId,
-          refreshAfterSeconds,
-          window: {
-            startsAt: spawnWindow.starts_at,
-            endsAt: spawnWindow.ends_at,
-            graceEndsAt: spawnWindow.grace_ends_at,
-          },
-          zones: [],
-          limitation: 'SAFE_WALKING_LOCATION_DATA_UNAVAILABLE',
-        });
-      }
-
-      for (const point of generatedLocations) {
-        const relic = await chooseRelic(
+      if (missingAmbientCandidate) {
+        const ambientRelic = await chooseRelic(
           spawnSecret,
-          zone.region_geohash,
+          `${zone.region_geohash}|${authData.user.id}`,
           spawnWindow.window_id,
-          point.slotIndex,
+          0,
           catalog,
+          "ambient",
         );
-        const seedDigest = await hmacDigest(
+        const ambientDigest = await hmacDigest(
           spawnSecret,
-          `audit|${zone.region_geohash}|${spawnWindow.window_id}|${point.slotIndex}`,
+          `audit|ambient|${authData.user.id}|${spawnWindow.window_id}`,
         );
-        const safetyStatus = point.safeLocationId ? 'verified' : 'unverified';
-        const { error: saveError } = await admin.rpc('server_save_spawn_candidate', {
-          p_spawn_window_id: spawnWindow.spawn_window_id,
-          p_slot_index: point.slotIndex,
-          p_relic_id: relic.relic_id,
-          p_latitude: point.latitude,
-          p_longitude: point.longitude,
-          p_safe_location_id: point.safeLocationId,
-          p_safety_status: safetyStatus,
-          p_safety_limitation: point.safeLocationId
-            ? null
-            : 'Development-only coordinate; no trusted pedestrian map validation was available',
-          p_seed_digest: seedDigest,
-        });
-
-        if (saveError) throw new Error('CANDIDATE_SAVE_FAILED');
+        const ambientSave = await admin.rpc(
+          "server_save_ambient_spawn_candidate",
+          {
+            p_user_id: authData.user.id,
+            p_spawn_window_id: spawnWindow.spawn_window_id,
+            p_relic_id: ambientRelic.relic_id,
+            p_latitude: anchor.latitude,
+            p_longitude: anchor.longitude,
+            p_seed_digest: ambientDigest,
+          },
+        );
+        if (ambientSave.error) throw new Error("AMBIENT_CANDIDATE_SAVE_FAILED");
       }
 
-      const refreshed = await admin.rpc('server_list_spawn_candidates', {
+      const { data: safeLocationRows, error: safeLocationError } = missingTierCandidates
+        ? await admin.rpc("server_get_safe_spawn_locations", {
+            p_region_geohash: zone.region_geohash,
+            p_center_latitude: zoneCenter.latitude,
+            p_center_longitude: zoneCenter.longitude,
+            p_radius_meters: REGIONAL_RADIUS_METERS,
+          })
+        : { data: [], error: null };
+
+      if (safeLocationError) throw new Error("SAFE_LOCATION_LOOKUP_FAILED");
+
+      const safeLocations: Array<Coordinate & { id: string }> = (
+        safeLocationRows ?? []
+      ).map(
+        (location: {
+          safe_location_id: string;
+          latitude: number;
+          longitude: number;
+        }) => ({
+          id: location.safe_location_id,
+          latitude: location.latitude,
+          longitude: location.longitude,
+        }),
+      );
+      for (const tier of missingTierCandidates ? SPAWN_TIERS : []) {
+        const existingSlots = new Set(
+          existingCandidates
+            .filter(
+              (candidate) =>
+                candidate.spawn_tier === tier.name,
+            )
+            .map((candidate) => candidate.slot_index),
+        );
+        if (existingSlots.size >= tier.count) continue;
+
+        const safeLocationsInTier = safeLocations.filter((location) => {
+          const distance = distanceMeters(zoneCenter, location);
+          return distance >= tier.minimumDistanceMeters &&
+            distance <= tier.maximumDistanceMeters;
+        });
+        const selectedSafeLocations = await selectDeterministicSafeLocations({
+          secret: spawnSecret,
+          regionGeohash: zone.region_geohash,
+          windowId: String(spawnWindow.window_id),
+          locations: safeLocationsInTier,
+          count: tier.count,
+          minimumSpacingMeters: tier.minimumSpacingMeters,
+          seedNamespace: `${tier.name}-safe-location`,
+          slotIndexOffset: tier.slotOffset,
+        });
+        const generatedLocations: Array<
+          Coordinate & {
+            slotIndex: number;
+            safeLocationId: string | null;
+            safetyLimitation: string | null;
+          }
+        > = selectedSafeLocations.map((location) => ({
+          ...location,
+          safeLocationId: location.id,
+          safetyLimitation: null,
+        }));
+        const fallbackCount = ALLOW_UNVERIFIED_SPAWNS
+          ? tier.count - generatedLocations.length
+          : 0;
+
+        if (fallbackCount > 0) {
+          const fallbackLocations = await generateDeterministicCandidates({
+            secret: spawnSecret,
+            regionGeohash: zone.region_geohash,
+            windowId: String(spawnWindow.window_id),
+            center: zoneCenter,
+            count: fallbackCount,
+            minimumDistanceMeters: tier.minimumDistanceMeters,
+            searchRadiusMeters: tier.maximumDistanceMeters,
+            minimumSpacingMeters: tier.minimumSpacingMeters,
+            seedNamespace: `${tier.name}-fallback`,
+            slotIndexOffset: tier.slotOffset + generatedLocations.length,
+            excludedPoints: generatedLocations,
+          });
+          generatedLocations.push(
+            ...fallbackLocations.map((location) => ({
+              ...location,
+              safeLocationId: null,
+              safetyLimitation:
+                "Development-only coordinate; no trusted pedestrian map validation was available",
+            })),
+          );
+        }
+
+        for (const point of generatedLocations) {
+          if (existingSlots.has(point.slotIndex)) continue;
+          const relic = await chooseRelic(
+            spawnSecret,
+            zone.region_geohash,
+            spawnWindow.window_id,
+            point.slotIndex,
+            catalog,
+            tier.name,
+          );
+          const seedDigest = await hmacDigest(
+            spawnSecret,
+            `audit|${tier.name}|${zone.region_geohash}|${spawnWindow.window_id}|${point.slotIndex}`,
+          );
+          const { error: saveError } = await admin.rpc(
+            "server_save_spawn_candidate",
+            {
+              p_spawn_window_id: spawnWindow.spawn_window_id,
+              p_slot_index: point.slotIndex,
+              p_relic_id: relic.relic_id,
+              p_latitude: point.latitude,
+              p_longitude: point.longitude,
+              p_safe_location_id: point.safeLocationId,
+              p_safety_status: point.safeLocationId ? "verified" : "unverified",
+              p_safety_limitation: point.safetyLimitation,
+              p_seed_digest: seedDigest,
+              p_spawn_tier: tier.name,
+            },
+          );
+
+          if (saveError) throw new Error("CANDIDATE_SAVE_FAILED");
+        }
+      }
+
+      const refreshed = await admin.rpc("server_list_spawn_candidates", {
         p_spawn_window_id: spawnWindow.spawn_window_id,
+        p_user_id: authData.user.id,
       });
-      if (refreshed.error) throw new Error('CANDIDATES_UNAVAILABLE');
+      if (refreshed.error) throw new Error("CANDIDATES_UNAVAILABLE");
       candidateRows = refreshed.data;
     }
 
@@ -507,29 +674,74 @@ Deno.serve(async (request) => {
         regionGeohash: zone.region_geohash,
         windowId: String(spawnWindow.window_id),
         slotIndex: candidate.slot_index,
-        exactPoint: { latitude: candidate.latitude, longitude: candidate.longitude },
-        clueDistanceBandsMeters: CLUE_DISTANCE_BANDS_METERS,
+        exactPoint: {
+          latitude: candidate.latitude,
+          longitude: candidate.longitude,
+        },
+        clueDistanceBandsMeters:
+          candidate.spawn_tier === "ambient"
+            ? AMBIENT_CLUE_DISTANCE_BANDS_METERS
+            : CLUE_DISTANCE_BANDS_METERS,
       });
 
-      const { error: assignmentError } = await admin.rpc('server_assign_relic_candidate', {
-        p_user_id: authData.user.id,
-        p_zone_id: zone.zone_id,
-        p_candidate_id: candidate.candidate_id,
-        p_mystery_latitude: mystery.center.latitude,
-        p_mystery_longitude: mystery.center.longitude,
-        p_mystery_radius_meters: mystery.radiusMeters,
-        p_clue_distance_band_meters: mystery.clueBandMeters,
-      });
+      const { error: assignmentError } = await admin.rpc(
+        "server_assign_relic_candidate",
+        {
+          p_user_id: authData.user.id,
+          p_zone_id: zone.zone_id,
+          p_candidate_id: candidate.candidate_id,
+          p_mystery_latitude: mystery.center.latitude,
+          p_mystery_longitude: mystery.center.longitude,
+          p_mystery_radius_meters: mystery.radiusMeters,
+          p_clue_distance_band_meters: mystery.clueBandMeters,
+        },
+      );
 
-      if (assignmentError) throw new Error('ASSIGNMENT_FAILED');
+      if (assignmentError) throw new Error("ASSIGNMENT_FAILED");
     }
 
     const { data: mysteryZones, error: mysteryError } = await admin.rpc(
-      'server_list_client_mystery_zones',
+      "server_list_client_mystery_zones",
       { p_user_id: authData.user.id, p_zone_id: zone.zone_id },
     );
 
-    if (mysteryError) throw new Error('FIELD_UNAVAILABLE');
+    if (mysteryError) throw new Error("FIELD_UNAVAILABLE");
+
+    if (Deno.env.get("RELIC_DEV_LOGGING") === "true") {
+      const finalCandidates = (candidateRows ?? []) as CandidateRecord[];
+      const availabilityRows = (mysteryZones ?? []) as Array<{
+        availability_status?: "available" | "locked";
+      }>;
+      const distances = finalCandidates.map((candidate) =>
+        distanceMeters(anchor, {
+          latitude: candidate.latitude,
+          longitude: candidate.longitude,
+        })
+      );
+      console.log("[RELIC WORLD]", {
+        ambient: finalCandidates.filter(
+          (candidate) => candidate.spawn_tier === "ambient",
+        ).length,
+        neighborhood: finalCandidates.filter(
+          (candidate) => candidate.spawn_tier === "neighborhood",
+        ).length,
+        local: finalCandidates.filter(
+          (candidate) => candidate.spawn_tier === "local",
+        ).length,
+        regional: finalCandidates.filter(
+          (candidate) => candidate.spawn_tier === "regional",
+        ).length,
+        available: availabilityRows.filter(
+          (assignment) => assignment.availability_status !== "locked",
+        ).length,
+        locked: availabilityRows.filter(
+          (assignment) => assignment.availability_status === "locked",
+        ).length,
+        nearestAvailableFeet: distances.length
+          ? Math.round(Math.min(...distances) * 3.28084)
+          : null,
+      });
+    }
 
     return jsonResponse({
       requestId,
@@ -546,9 +758,30 @@ Deno.serve(async (request) => {
       },
       zones: mysteryZones ?? [],
     });
-  } catch {
-    // Do not echo caught messages: database errors may contain identifiers or
-    // coordinates. The request ID is enough to correlate sanitized server logs.
-    return jsonResponse({ error: 'RELIC_FIELD_UNAVAILABLE', requestId }, 500);
+  } catch (error) {
+    const internalCode =
+      error instanceof Error ? error.message : "UNKNOWN_RELIC_FIELD_FAILURE";
+
+    if (internalCode === "INVALID_ANCHOR") {
+      return jsonResponse(
+        {
+          error: "IMPROVING_ACCURACY",
+          requestId,
+          message:
+            "Getting a safer GPS lock… Hold still near a window or step into an open area.",
+        },
+        422,
+      );
+    }
+
+    console.error(`[relic-field:${requestId}] ${internalCode}`);
+
+    return jsonResponse(
+      {
+        error: "RELIC_FIELD_UNAVAILABLE",
+        requestId,
+      },
+      500,
+    );
   }
 });

@@ -16,9 +16,7 @@ import {
   calculateMeetupDistanceMiles,
   calculateRemainingCapacity,
   determineMeetupStatusLabel,
-  filterMeetups,
-  filterMeetupsByRadius,
-  sortMeetupsByRelevance,
+  filterMeetupsForMap,
   type MeetupPopularityContext,
   type MeetupRadiusMiles,
   type OptionalCoordinate,
@@ -48,6 +46,7 @@ const CATEGORY_LABELS: Readonly<Record<MeetupCategory, string>> = {
 };
 
 /** Shows nearby meetups without owning or continuously requesting GPS state. */
+// Purpose: Renders the meetups today section interface.
 export function MeetupsTodaySection({
   meetups,
   userLocation,
@@ -76,12 +75,16 @@ export function MeetupsTodaySection({
 
   // Filtering and sorting run again only when relevant data or discovery settings change.
   const visibleMeetups = useMemo(() => {
-    const today = filterMeetups(meetups, 'today', popularityContext);
-    const nearby = filterMeetupsByRadius(today, userLocation, radiusMiles);
-    return sortMeetupsByRelevance(nearby, popularityContext);
-  }, [meetups, popularityContext, radiusMiles, userLocation]);
+    return filterMeetupsForMap(meetups, {
+      ...popularityContext,
+      currentUserId,
+      radiusMiles,
+      maxMarkers: 100,
+    });
+  }, [currentUserId, meetups, popularityContext, radiusMiles]);
 
   // FlatList reuses this render callback while its real inputs remain unchanged.
+  // Purpose: Renders meetup.
   const renderMeetup = useCallback(({ item }: { item: Meetup }) => (
     <MeetupTodayCard
       meetup={item}
@@ -138,6 +141,7 @@ type CardProps = {
 };
 
 /** Displays the social, location, mission, and relic facts for one meetup. */
+// Purpose: Renders the meetup today card interface.
 const MeetupTodayCard = memo(function MeetupTodayCard({
   meetup,
   cardWidth,
@@ -151,7 +155,9 @@ const MeetupTodayCard = memo(function MeetupTodayCard({
   const friendsAttending = calculateFriendsAttending(meetup, context.friendUserIds);
   const distanceMiles = calculateMeetupDistanceMiles(context.userLocation, meetup);
   const remainingCapacity = calculateRemainingCapacity(meetup);
-  const status = determineMeetupStatusLabel(meetup, context) ?? 'Meetup';
+  const status = meetup.isCancelled
+    ? 'Cancelled'
+    : determineMeetupStatusLabel(meetup, context) ?? 'Meetup';
   const joined = Boolean(currentUserId && meetup.attendeeIds.includes(currentUserId));
   const ended = hasMeetupEnded(meetup, context.now ?? new Date());
   const full = remainingCapacity === 0;
@@ -249,6 +255,7 @@ const MeetupTodayCard = memo(function MeetupTodayCard({
 });
 
 /** Displays a labeled fact so meaning never depends on color alone. */
+// Purpose: Renders the meetup fact interface.
 function MeetupFact({ icon, label, value }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -266,6 +273,7 @@ function MeetupFact({ icon, label, value }: {
 }
 
 /** Shows a readable mission or relic connection with an icon and text label. */
+// Purpose: Renders the connection line interface.
 function ConnectionLine({ icon, label, value, color }: {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -282,6 +290,7 @@ function ConnectionLine({ icon, label, value, color }: {
 }
 
 /** Provides guidance when today's radius search has no results. */
+// Purpose: Renders the meetups empty state interface.
 function MeetupsEmptyState({ radiusMiles }: { radiusMiles: MeetupRadiusMiles }) {
   return (
     <View accessible accessibilityLabel={`No meetups within ${radiusMiles} miles today`} style={styles.emptyState}>
@@ -295,11 +304,13 @@ function MeetupsEmptyState({ radiusMiles }: { radiusMiles: MeetupRadiusMiles }) 
 }
 
 /** Adds consistent spacing between horizontal cards without creating empty data. */
+// Purpose: Renders the meetup separator interface.
 function MeetupSeparator() {
   return <View style={styles.separator} />;
 }
 
 /** Formats today's meetup times with the device's local 12-hour or 24-hour preference. */
+// Purpose: Formats meetup time range.
 function formatMeetupTimeRange(meetup: Meetup): string {
   const start = new Date(meetup.startTime);
   const end = new Date(meetup.endTime);
@@ -309,12 +320,14 @@ function formatMeetupTimeRange(meetup: Meetup): string {
 }
 
 /** Prevents joining once the meetup's recorded end time has passed. */
+// Purpose: Determines whether has meetup ended.
 function hasMeetupEnded(meetup: Meetup, now: Date): boolean {
   const endTimestamp = Date.parse(meetup.endTime);
   return Number.isFinite(endTimestamp) && endTimestamp <= now.getTime();
 }
 
 /** Chooses clear button text for every join state. */
+// Purpose: Returns join label.
 function getJoinLabel({ joined, cancelled, full, ended, joining }: {
   joined: boolean;
   cancelled: boolean;
