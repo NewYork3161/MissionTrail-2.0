@@ -46,4 +46,3 @@ example
 
 # iOS build files - keep outside GitHub
 *.ipa
-.env

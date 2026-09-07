@@ -5,7 +5,6 @@ import { useLocalSearchParams } from 'expo-router';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
-
 import {
   Alert,
   Animated,
@@ -17,24 +16,18 @@ import {
   View,
   type ImageSourcePropType,
 } from 'react-native';
-
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MissionBottomTabBar } from '@/components/mission-bottom-tab-bar';
 import { getCompanionById } from '@/data/companions';
 import { useDailyProgress } from '@/hooks/use-daily-progress';
-
 import {
   clampPercent,
   formatCompanionName,
   getEnergyPercent,
 } from '@/utils/companion-progress';
-
 import { getPlayerLevelProgress } from '@/utils/player-level';
 import { supabase } from '../../lib/supabase';
-
-// Companion animation component
-import CompanionAnimation from './companion-animation';
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -1546,222 +1539,245 @@ function HomeView({
       </View>
 
       {/* ======================================
-    HERO
-====================================== */}
-<View style={homeStyles.heroLayout}>
-  <View style={homeStyles.orbColumn}>
-    <LinearGradient
-      colors={[
-        '#D22CFF',
-        '#713EFF',
-        '#16D9FF',
-        '#D92CFF',
-      ]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={homeStyles.orbBorder}
-    >
-      <View style={homeStyles.orbMiddle}>
-        <Animated.View
-          style={[
-            homeStyles.orbInner,
-            {
-              transform: [
-                {
-                  scale: petScale,
-                },
-              ],
-            },
-          ]}
-        >
-          <CompanionAnimation />
-        </Animated.View>
+          HERO
+      ====================================== */}
+      <View style={homeStyles.heroLayout}>
+        <View style={homeStyles.orbColumn}>
+          <LinearGradient
+            colors={[
+              '#D22CFF',
+              '#713EFF',
+              '#16D9FF',
+              '#D92CFF',
+            ]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={homeStyles.orbBorder}
+          >
+            <View style={homeStyles.orbMiddle}>
+              <Animated.View
+                style={[
+                  homeStyles.orbInner,
+                  {
+                    transform: [
+                      {
+                        scale: petScale,
+                      },
+                    ],
+                  },
+                ]}
+              >
+                {hasCompanion ? (
+                  <Image
+                    source={companionImage}
+                    resizeMode="contain"
+                    style={homeStyles.companionImage}
+                  />
+                ) : (
+                  <View style={homeStyles.emptyCompanion}>
+                    <Ionicons
+                      name="egg-outline"
+                      size={106}
+                      color="#B889CB"
+                    />
+
+                    <Text style={homeStyles.emptyTitle}>
+                      NO COMPANION YET
+                    </Text>
+
+                    <Text style={homeStyles.emptySubtitle}>
+                      Hatch an egg to awaken one
+                    </Text>
+                  </View>
+                )}
+              </Animated.View>
+            </View>
+          </LinearGradient>
+
+          {petMessage ? (
+            <View style={homeStyles.petMessage}>
+              <Text style={homeStyles.petMessageText}>
+                {petMessage}
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={homeStyles.statusRow}>
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="heart"
+                size={14}
+                color="#FF4AD8"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${bondPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Bond
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="flash"
+                size={14}
+                color="#46E6FF"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${energyPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Energy
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="restaurant"
+                size={14}
+                color="#FFB84D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${hungerPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Hunger
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="happy"
+                size={14}
+                color="#FFD84D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${happinessPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Happy
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="medkit"
+                size={14}
+                color="#62FF9D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${healthPercent}%` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Health
+              </Text>
+            </View>
+
+            <View style={homeStyles.statusPill}>
+              <Ionicons
+                name="flame"
+                size={14}
+                color="#FF784D"
+              />
+
+              <Text style={homeStyles.statusValue}>
+                {hasCompanion ? `${careStreak}` : '--'}
+              </Text>
+
+              <Text style={homeStyles.statusLabel}>
+                Streak
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ======================================
+            RIGHT SIDE INFO
+        ====================================== */}
+        <View style={homeStyles.sideColumn}>
+          <View style={homeStyles.infoCard}>
+            <Text style={homeStyles.infoEyebrow}>
+              XP & LEVEL
+            </Text>
+
+            <Text style={homeStyles.infoMain}>
+              Level {playerLevel}
+            </Text>
+
+            <Text style={homeStyles.infoSub}>
+              {totalXp.toLocaleString()} lifetime XP
+            </Text>
+
+            <View style={homeStyles.progressTrack}>
+              <LinearGradient
+                colors={[
+                  '#922BFF',
+                  '#DE38FF',
+                ]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={[
+                  homeStyles.progressFill,
+                  {
+                    width: `${Math.min(
+                      100,
+                      Math.max(
+                        8,
+                        (playerLevel % 10) * 10,
+                      ),
+                    )}%`,
+                  },
+                ]}
+              />
+            </View>
+          </View>
+
+          <View style={homeStyles.infoCard}>
+            <Text style={homeStyles.infoEyebrow}>
+              EVOLUTION
+            </Text>
+
+            <Text style={homeStyles.infoMain}>
+              {hasCompanion
+                ? companionDefinition?.rarity ?? 'Current Form'
+                : 'Locked'}
+            </Text>
+
+            <Text style={homeStyles.evolutionPercent}>
+              --%
+            </Text>
+
+            <Text style={homeStyles.infoSub}>
+              {hasCompanion
+                ? 'Evolution progress not configured yet'
+                : 'Hatch a companion to unlock'}
+            </Text>
+
+            <View style={homeStyles.progressTrack}>
+              <View
+                style={[
+                  homeStyles.progressFill,
+                  {
+                    width: '0%',
+                    backgroundColor: '#B72DFF',
+                  },
+                ]}
+              />
+            </View>
+          </View>
+        </View>
       </View>
-    </LinearGradient>
 
-    {petMessage ? (
-      <View style={homeStyles.petMessage}>
-        <Text style={homeStyles.petMessageText}>
-          {petMessage}
-        </Text>
-      </View>
-    ) : null}
-
-    <View style={homeStyles.statusRow}>
-      <View style={homeStyles.statusPill}>
-        <Ionicons
-          name="heart"
-          size={14}
-          color="#FF4AD8"
-        />
-
-        <Text style={homeStyles.statusValue}>
-          {hasCompanion ? `${bondPercent}%` : '--'}
-        </Text>
-
-        <Text style={homeStyles.statusLabel}>
-          Bond
-        </Text>
-      </View>
-
-      <View style={homeStyles.statusPill}>
-        <Ionicons
-          name="flash"
-          size={14}
-          color="#46E6FF"
-        />
-
-        <Text style={homeStyles.statusValue}>
-          {hasCompanion ? `${energyPercent}%` : '--'}
-        </Text>
-
-        <Text style={homeStyles.statusLabel}>
-          Energy
-        </Text>
-      </View>
-
-      <View style={homeStyles.statusPill}>
-        <Ionicons
-          name="restaurant"
-          size={14}
-          color="#FFB84D"
-        />
-
-        <Text style={homeStyles.statusValue}>
-          {hasCompanion ? `${hungerPercent}%` : '--'}
-        </Text>
-
-        <Text style={homeStyles.statusLabel}>
-          Hunger
-        </Text>
-      </View>
-
-      <View style={homeStyles.statusPill}>
-        <Ionicons
-          name="happy"
-          size={14}
-          color="#FFD84D"
-        />
-
-        <Text style={homeStyles.statusValue}>
-          {hasCompanion ? `${happinessPercent}%` : '--'}
-        </Text>
-
-        <Text style={homeStyles.statusLabel}>
-          Happy
-        </Text>
-      </View>
-
-      <View style={homeStyles.statusPill}>
-        <Ionicons
-          name="medkit"
-          size={14}
-          color="#62FF9D"
-        />
-
-        <Text style={homeStyles.statusValue}>
-          {hasCompanion ? `${healthPercent}%` : '--'}
-        </Text>
-
-        <Text style={homeStyles.statusLabel}>
-          Health
-        </Text>
-      </View>
-
-      <View style={homeStyles.statusPill}>
-        <Ionicons
-          name="flame"
-          size={14}
-          color="#FF784D"
-        />
-
-        <Text style={homeStyles.statusValue}>
-          {hasCompanion ? `${careStreak}` : '--'}
-        </Text>
-
-        <Text style={homeStyles.statusLabel}>
-          Streak
-        </Text>
-      </View>
-    </View>
-  </View>
-
-  {/* ======================================
-      RIGHT SIDE INFO
-  ====================================== */}
-  <View style={homeStyles.sideColumn}>
-    <View style={homeStyles.infoCard}>
-      <Text style={homeStyles.infoEyebrow}>
-        XP & LEVEL
-      </Text>
-
-      <Text style={homeStyles.infoMain}>
-        Level {playerLevel}
-      </Text>
-
-      <Text style={homeStyles.infoSub}>
-        {totalXp.toLocaleString()} lifetime XP
-      </Text>
-
-      <View style={homeStyles.progressTrack}>
-        <LinearGradient
-          colors={[
-            '#922BFF',
-            '#DE38FF',
-          ]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={[
-            homeStyles.progressFill,
-            {
-              width: `${Math.min(
-                100,
-                Math.max(
-                  8,
-                  (playerLevel % 10) * 10,
-                ),
-              )}%`,
-            },
-          ]}
-        />
-      </View>
-    </View>
-
-    <View style={homeStyles.infoCard}>
-      <Text style={homeStyles.infoEyebrow}>
-        EVOLUTION
-      </Text>
-
-      <Text style={homeStyles.infoMain}>
-        {hasCompanion
-          ? companionDefinition?.rarity ?? 'Current Form'
-          : 'Locked'}
-      </Text>
-
-      <Text style={homeStyles.evolutionPercent}>
-        --%
-      </Text>
-
-      <Text style={homeStyles.infoSub}>
-        {hasCompanion
-          ? 'Evolution progress not configured yet'
-          : 'Hatch a companion to unlock'}
-      </Text>
-
-      <View style={homeStyles.progressTrack}>
-        <View
-          style={[
-            homeStyles.progressFill,
-            {
-              width: '0%',
-              backgroundColor: '#B72DFF',
-            },
-          ]}
-        />
-      </View>
-    </View>
-  </View>
-</View>
       {/* ======================================
           TODAY'S PROGRESS
       ====================================== */}
