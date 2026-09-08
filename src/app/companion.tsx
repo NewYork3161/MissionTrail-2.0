@@ -1,10 +1,9 @@
-import { router as expoRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useLocalSearchParams } from 'expo-router';
-import { useRouter } from 'expo-router';
+import { router as expoRouter, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
+
 import {
   Alert,
   Animated,
@@ -16,19 +15,22 @@ import {
   View,
   type ImageSourcePropType,
 } from 'react-native';
+
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MissionBottomTabBar } from '@/components/mission-bottom-tab-bar';
+import Companion3DViewer from '@/components/Companion3DViewer';
 import { getCompanionById } from '@/data/companions';
 import { useDailyProgress } from '@/hooks/use-daily-progress';
+
 import {
   clampPercent,
   formatCompanionName,
   getEnergyPercent,
 } from '@/utils/companion-progress';
+
 import { getPlayerLevelProgress } from '@/utils/player-level';
 import { supabase } from '../../lib/supabase';
-
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
 type CompanionView =
@@ -1567,29 +1569,7 @@ function HomeView({
                   },
                 ]}
               >
-                {hasCompanion ? (
-                  <Image
-                    source={companionImage}
-                    resizeMode="contain"
-                    style={homeStyles.companionImage}
-                  />
-                ) : (
-                  <View style={homeStyles.emptyCompanion}>
-                    <Ionicons
-                      name="egg-outline"
-                      size={106}
-                      color="#B889CB"
-                    />
-
-                    <Text style={homeStyles.emptyTitle}>
-                      NO COMPANION YET
-                    </Text>
-
-                    <Text style={homeStyles.emptySubtitle}>
-                      Hatch an egg to awaken one
-                    </Text>
-                  </View>
-                )}
+                <Companion3DViewer model="/glbModels/TheMaintis.glb" />
               </Animated.View>
             </View>
           </LinearGradient>
