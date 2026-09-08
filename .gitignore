@@ -50,3 +50,5 @@ public/glbModels/TheMaintis.glb
 public/glbModels/TheMaintis.glb
 public/glbModels/TheMaintis.glb
 public/glbModels/TheMaintis.glb
+src/components/public/glbModels/*.glb
+public/glbModels/*.glb
