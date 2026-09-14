@@ -1,4 +1,3 @@
-
 // ======================================================
 // ONBOARDING CHECK ID
 // ======================================================
@@ -17,6 +16,7 @@
 // 4. Send the image + onboarding information to
 //    onboarding_ai_check_id_authentication.ts
 // 5. Display the verification result
+// 6. Continue verified new users to the questionnaire
 //
 // ======================================================
 
@@ -45,7 +45,6 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { supabase } from '../../lib/supabase';
 
-
 // ======================================================
 // AI AUTHENTICATION SERVICE
 // ======================================================
@@ -62,8 +61,6 @@ import {
   saveOnboardingVerificationTicket,
 } from '@/services/onboarding-verification-ticket-service';
 
-
-
 // ======================================================
 // SCREEN
 // ======================================================
@@ -79,66 +76,105 @@ export default function OnboardingCheckId() {
     firstName?: string;
     lastName?: string;
     displayName?: string;
+    email?: string;
+    phoneNumber?: string;
     birthday?: string;
     city?: string;
     state?: string;
     country?: string;
+    accountAccessMode?: string;
+    idVerificationStatus?: string;
+    privacyPolicyVersion?: string;
+    safetyPolicyVersion?: string;
+    privacyAcceptedAt?: string;
+    safetyAcceptedAt?: string;
     questionnaireAnswers?: string;
-  
+
     // Purpose:
     // Explicitly marks this ID check as an upgrade
     // for an already-existing account.
     upgradeExistingAccount?: string;
-}>();
-
+  }>();
 
   const firstName =
     typeof params.firstName === 'string'
       ? params.firstName
       : '';
 
-
   const lastName =
     typeof params.lastName === 'string'
       ? params.lastName
       : '';
-
 
   const displayName =
     typeof params.displayName === 'string'
       ? params.displayName
       : '';
 
+  const email =
+    typeof params.email === 'string'
+      ? params.email
+      : '';
+
+  const phoneNumber =
+    typeof params.phoneNumber === 'string'
+      ? params.phoneNumber
+      : '';
 
   const birthday =
     typeof params.birthday === 'string'
       ? params.birthday
       : '';
 
-
   const city =
     typeof params.city === 'string'
       ? params.city
       : '';
-
 
   const state =
     typeof params.state === 'string'
       ? params.state
       : '';
 
-
   const country =
     typeof params.country === 'string'
       ? params.country
       : '';
 
+  const accountAccessMode =
+    typeof params.accountAccessMode === 'string'
+      ? params.accountAccessMode
+      : 'id_required';
+
+  const idVerificationStatus =
+    typeof params.idVerificationStatus === 'string'
+      ? params.idVerificationStatus
+      : 'not_started';
+
+  const privacyPolicyVersion =
+    typeof params.privacyPolicyVersion === 'string'
+      ? params.privacyPolicyVersion
+      : '';
+
+  const safetyPolicyVersion =
+    typeof params.safetyPolicyVersion === 'string'
+      ? params.safetyPolicyVersion
+      : '';
+
+  const privacyAcceptedAt =
+    typeof params.privacyAcceptedAt === 'string'
+      ? params.privacyAcceptedAt
+      : '';
+
+  const safetyAcceptedAt =
+    typeof params.safetyAcceptedAt === 'string'
+      ? params.safetyAcceptedAt
+      : '';
 
   const questionnaireAnswers =
     typeof params.questionnaireAnswers === 'string'
       ? params.questionnaireAnswers
       : '{}';
-
 
   // ====================================================
   // STATE
@@ -149,10 +185,8 @@ export default function OnboardingCheckId() {
       null
     );
 
-
   const [verifying, setVerifying] =
     useState(false);
-
 
   const [
     verificationResult,
@@ -161,7 +195,6 @@ export default function OnboardingCheckId() {
     useState<IdVerificationResult | null>(
       null
     );
-
 
   // ====================================================
   // CLEAR PREVIOUS VERIFICATION
@@ -172,7 +205,6 @@ export default function OnboardingCheckId() {
     setVerificationResult(null);
   };
 
-
   // ====================================================
   // SHOW MESSAGE
   // ====================================================
@@ -182,7 +214,6 @@ export default function OnboardingCheckId() {
     title: string,
     message: string
   ) => {
-
     if (
       Platform.OS === 'web' &&
       typeof window !== 'undefined'
@@ -194,12 +225,12 @@ export default function OnboardingCheckId() {
     Alert.alert(title, message);
   };
 
-
   // ====================================================
   // SELECT ID FROM DEVICE
   // ====================================================
   //
   // IMPORTANT FOR EXPO WEB:
+  //
   // Browsers do not need React Native media-library
   // permission before opening the file chooser. Asking for
   // that permission first can prevent the picker from ever
@@ -209,7 +240,6 @@ export default function OnboardingCheckId() {
 
   // Purpose: Lets the user choose an ID image from the device library.
   const selectIdImage = async () => {
-
     if (verifying) {
       return;
     }
@@ -217,9 +247,7 @@ export default function OnboardingCheckId() {
     console.log('[CHECK ID] Upload ID Image pressed.');
 
     try {
-
       if (Platform.OS !== 'web') {
-
         const permission =
           await ImagePicker.requestMediaLibraryPermissionsAsync();
 
@@ -228,6 +256,7 @@ export default function OnboardingCheckId() {
             'Photo Permission Required',
             'MissionTrail needs permission to access your photos so you can select the front of your ID.'
           );
+
           return;
         }
       }
@@ -252,16 +281,18 @@ export default function OnboardingCheckId() {
           'Unable to Read Image',
           'Please select another image of your ID.'
         );
+
         return;
       }
 
       clearVerificationResult();
       setIdImage(image.uri);
 
-      console.log('[CHECK ID] ID image selected successfully.');
+      console.log(
+        '[CHECK ID] ID image selected successfully.'
+      );
 
     } catch (error) {
-
       console.error(
         '[CHECK ID] Error selecting ID image:',
         error
@@ -273,7 +304,6 @@ export default function OnboardingCheckId() {
       );
     }
   };
-
 
   // ====================================================
   // TAKE ID PHOTO
@@ -290,7 +320,6 @@ export default function OnboardingCheckId() {
 
   // Purpose: Opens the camera so the user can photograph an ID.
   const takeIdPhoto = async () => {
-
     if (verifying) {
       return;
     }
@@ -298,9 +327,7 @@ export default function OnboardingCheckId() {
     console.log('[CHECK ID] Take a Picture pressed.');
 
     try {
-
       if (Platform.OS !== 'web') {
-
         const permission =
           await ImagePicker.requestCameraPermissionsAsync();
 
@@ -309,6 +336,7 @@ export default function OnboardingCheckId() {
             'Camera Permission Required',
             'MissionTrail needs camera access so you can photograph the front of your ID.'
           );
+
           return;
         }
       }
@@ -333,16 +361,18 @@ export default function OnboardingCheckId() {
           'Unable to Read Photo',
           'Please take another photo of your ID.'
         );
+
         return;
       }
 
       clearVerificationResult();
       setIdImage(image.uri);
 
-      console.log('[CHECK ID] ID photo captured successfully.');
+      console.log(
+        '[CHECK ID] ID photo captured successfully.'
+      );
 
     } catch (error) {
-
       console.error(
         '[CHECK ID] Error taking ID photo:',
         error
@@ -353,6 +383,7 @@ export default function OnboardingCheckId() {
           'Camera Could Not Open',
           'Your browser could not open the camera. You can use Upload ID Image to choose a photo from your computer instead.'
         );
+
         return;
       }
 
@@ -363,24 +394,19 @@ export default function OnboardingCheckId() {
     }
   };
 
-
   // ====================================================
   // REMOVE SELECTED ID
   // ====================================================
 
   // Purpose: Removes the selected ID image and resets its verification state.
   const removeIdImage = () => {
-
     if (verifying) {
       return;
     }
 
-
     setIdImage(null);
-
     clearVerificationResult();
   };
-
 
   // ====================================================
   // CHECK REQUIRED ONBOARDING INFORMATION
@@ -391,7 +417,6 @@ export default function OnboardingCheckId() {
     (): boolean => {
 
       if (!firstName.trim()) {
-
         Alert.alert(
           'First Name Required',
           'Please go back and enter your first name before verifying your ID.'
@@ -400,9 +425,7 @@ export default function OnboardingCheckId() {
         return false;
       }
 
-
       if (!lastName.trim()) {
-
         Alert.alert(
           'Last Name Required',
           'Please go back and enter your last name before verifying your ID.'
@@ -411,9 +434,7 @@ export default function OnboardingCheckId() {
         return false;
       }
 
-
       if (!birthday.trim()) {
-
         Alert.alert(
           'Birthday Required',
           'Please go back and enter your date of birth before verifying your ID.'
@@ -422,10 +443,8 @@ export default function OnboardingCheckId() {
         return false;
       }
 
-
       return true;
     };
-
 
   // ====================================================
   // VERIFY ID
@@ -442,13 +461,11 @@ export default function OnboardingCheckId() {
       return;
     }
 
-
     // --------------------------------------------------
     // REQUIRE IMAGE
     // --------------------------------------------------
 
     if (!idImage) {
-
       Alert.alert(
         'ID Required',
         'Please upload or photograph the front of your ID first.'
@@ -457,24 +474,17 @@ export default function OnboardingCheckId() {
       return;
     }
 
-
     // --------------------------------------------------
     // REQUIRE ONBOARDING INFORMATION
     // --------------------------------------------------
 
-    if (
-      !validateOnboardingInformation()
-    ) {
+    if (!validateOnboardingInformation()) {
       return;
     }
 
-
     try {
-
       setVerifying(true);
-
       clearVerificationResult();
-
 
       // ==================================================
       // CALL AI AUTHENTICATION SERVICE
@@ -532,7 +542,6 @@ export default function OnboardingCheckId() {
           },
         });
 
-
       // ==================================================
       // SAVE RESULT TO SCREEN STATE
       // ==================================================
@@ -540,7 +549,6 @@ export default function OnboardingCheckId() {
       setVerificationResult(
         result
       );
-
 
       // ==================================================
       // SUCCESSFUL MATCH
@@ -558,27 +566,25 @@ export default function OnboardingCheckId() {
         //
         // The ticket is deliberately kept out of
         // Expo Router parameters.
-        if (!result.verificationTicket) {
 
+        if (!result.verificationTicket) {
           throw new Error(
             'Secure verification ticket was not returned. Please verify your ID again.'
           );
         }
 
-
         // Purpose:
         // Checks whether this verification belongs to an
         // already-created signed-in account.
+
         const {
           data: sessionData,
         } =
           await supabase.auth.getSession();
 
-
         const existingUser =
           sessionData.session?.user ??
           null;
-
 
         // Purpose:
         // Existing-account verification is allowed only when
@@ -587,15 +593,16 @@ export default function OnboardingCheckId() {
         //
         // A saved Supabase session by itself must NEVER turn
         // normal signup verification into an account upgrade.
+
         const upgradeExistingAccount =
           params.upgradeExistingAccount ===
           'true';
-
 
         // Purpose:
         // Existing Kids Mode accounts must consume the
         // trusted server ticket before the database can
         // change them to verified access.
+
         if (
           existingUser &&
           upgradeExistingAccount
@@ -605,26 +612,22 @@ export default function OnboardingCheckId() {
             '[CHECK ID] Existing account detected. Redeeming secure verification ticket...'
           );
 
-
-          let parsedQuestionnaireAnswers: Record<string, unknown> = {};
-
+          let parsedQuestionnaireAnswers:
+            Record<string, unknown> = {};
 
           // Purpose:
           // Converts the questionnaire route value into JSON
           // before securely saving it with the verified account.
-          try {
 
+          try {
             parsedQuestionnaireAnswers =
               JSON.parse(
                 questionnaireAnswers
               );
-
           } catch {
-
             parsedQuestionnaireAnswers =
               {};
           }
-
 
           const {
             data: upgraded,
@@ -662,22 +665,20 @@ export default function OnboardingCheckId() {
               }
             );
 
-
           if (
             upgradeError ||
             upgraded !== true
           ) {
-
             throw new Error(
               upgradeError?.message ||
               'Your ID matched, but the account could not be upgraded.'
             );
           }
 
-
           // Purpose:
           // Confirms Supabase now considers this account
           // verified before returning the user to Home.
+
           const {
             data: verifiedProfile,
             error: profileError,
@@ -695,14 +696,11 @@ export default function OnboardingCheckId() {
               )
               .single();
 
-
           if (profileError) {
-
             throw new Error(
               profileError.message
             );
           }
-
 
           if (
             verifiedProfile?.account_access_mode !==
@@ -710,17 +708,14 @@ export default function OnboardingCheckId() {
             verifiedProfile?.id_verification_status !==
               'verified'
           ) {
-
             throw new Error(
               'ID verification succeeded, but verified account access was not saved.'
             );
           }
 
-
           console.log(
             '[CHECK ID] Account confirmed VERIFIED in Supabase.'
           );
-
 
           router.replace(
             '/home-backup'
@@ -729,48 +724,48 @@ export default function OnboardingCheckId() {
           return;
         }
 
-
         // Purpose:
         // A user who has not created an account yet keeps
         // the secure ticket locally until Signup consumes it.
+
         await saveOnboardingVerificationTicket(
           result.verificationTicket
         );
 
-
         console.log(
-          '[CHECK ID] Pre-signup ID verified. Opening onboarding_success...'
+          '[CHECK ID] Pre-signup ID verified. Opening onboarding_questionnaire...'
         );
-
 
         router.replace({
           pathname:
-            '/onboarding_success',
+            '/onboarding_questionnaire',
 
           params: {
-
             firstName,
             lastName,
             displayName,
+            email,
+            phoneNumber,
             birthday,
             city,
             state,
             country,
-
-            questionnaireAnswers,
 
             accountAccessMode:
               'verified',
 
             idVerificationStatus:
               'verified',
+
+            privacyPolicyVersion,
+            safetyPolicyVersion,
+            privacyAcceptedAt,
+            safetyAcceptedAt,
           },
         });
 
-
         return;
       }
-
 
       // ==================================================
       // MANUAL REVIEW / UNREADABLE
@@ -781,7 +776,6 @@ export default function OnboardingCheckId() {
           result
         )
       ) {
-
         Alert.alert(
           'Unable to Verify',
           getIdentityVerificationMessage(
@@ -792,7 +786,6 @@ export default function OnboardingCheckId() {
         return;
       }
 
-
       // ==================================================
       // MISMATCH
       // ==================================================
@@ -801,7 +794,6 @@ export default function OnboardingCheckId() {
         result.status ===
         'mismatch'
       ) {
-
         Alert.alert(
           'Information Does Not Match',
           getIdentityVerificationMessage(
@@ -811,7 +803,6 @@ export default function OnboardingCheckId() {
 
         return;
       }
-
 
       // ==================================================
       // OTHER RESULT
@@ -831,11 +822,9 @@ export default function OnboardingCheckId() {
         error
       );
 
-
       const message =
         error?.message ||
         'We could not verify your ID. Please try again.';
-
 
       Alert.alert(
         'Verification Error',
@@ -843,11 +832,9 @@ export default function OnboardingCheckId() {
       );
 
     } finally {
-
       setVerifying(false);
     }
   };
-
 
   // ====================================================
   // RESULT APPEARANCE
@@ -857,23 +844,19 @@ export default function OnboardingCheckId() {
     verificationResult?.status ===
     'matched';
 
-
   const verificationMismatch =
     verificationResult?.status ===
     'mismatch';
 
-
   const verificationUnable =
     verificationResult?.status ===
     'unable_to_verify';
-
 
   // ====================================================
   // SCREEN
   // ====================================================
 
   return (
-
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
@@ -886,15 +869,12 @@ export default function OnboardingCheckId() {
       ================================================== */}
 
       <View style={styles.iconCircle}>
-
         <Ionicons
           name="shield-checkmark-outline"
           size={48}
           color="#63D8FF"
         />
-
       </View>
-
 
       {/* ==================================================
           HEADER
@@ -904,12 +884,10 @@ export default function OnboardingCheckId() {
         Verify Your Identity
       </Text>
 
-
       <Text style={styles.subtitle}>
         MissionTrail uses identity verification to help
         protect our community.
       </Text>
-
 
       {/* ==================================================
           INFORMATION
@@ -918,32 +896,26 @@ export default function OnboardingCheckId() {
       <View style={styles.infoCard}>
 
         <View style={styles.infoHeader}>
-
           <Ionicons
             name="id-card-outline"
             size={28}
             color="#63D8FF"
           />
 
-
           <Text style={styles.infoTitle}>
             Front of ID Only
           </Text>
-
         </View>
-
 
         <Text style={styles.infoText}>
           Upload a clear image of the front of your
           government-issued photo ID.
         </Text>
 
-
         <Text style={styles.infoText}>
           Make sure your name and date of birth are
           clear and readable.
         </Text>
-
 
         <Text style={styles.infoText}>
           MissionTrail will compare the readable
@@ -952,7 +924,6 @@ export default function OnboardingCheckId() {
         </Text>
 
       </View>
-
 
       {/* ==================================================
           SELECTED ID PREVIEW
@@ -966,7 +937,6 @@ export default function OnboardingCheckId() {
             ID Preview
           </Text>
 
-
           <Image
             source={{
               uri: idImage,
@@ -974,7 +944,6 @@ export default function OnboardingCheckId() {
             style={styles.previewImage}
             resizeMode="contain"
           />
-
 
           <TouchableOpacity
             style={styles.removeButton}
@@ -989,7 +958,6 @@ export default function OnboardingCheckId() {
               color="#FF7B8A"
             />
 
-
             <Text style={styles.removeButtonText}>
               Remove and Try Again
             </Text>
@@ -1000,10 +968,6 @@ export default function OnboardingCheckId() {
 
       ) : (
 
-        // ==================================================
-        // ID UPLOAD AREA
-        // ==================================================
-
         <View style={styles.uploadArea}>
 
           <Ionicons
@@ -1012,31 +976,25 @@ export default function OnboardingCheckId() {
             color="#63D8FF"
           />
 
-
           <Text style={styles.uploadTitle}>
             Add Your ID
           </Text>
-
 
           <Text style={styles.uploadText}>
             Upload an existing image or take a new
             photo of the front of your ID.
           </Text>
 
-
           {Platform.OS === 'web' && (
-
             <Text style={styles.webHint}>
               On a computer, choose an ID image from
               your device.
             </Text>
-
           )}
 
         </View>
 
       )}
-
 
       {/* ==================================================
           UPLOAD BUTTON
@@ -1059,20 +1017,15 @@ export default function OnboardingCheckId() {
           color="#63D8FF"
         />
 
-
         <View style={styles.optionTextContainer}>
-
           <Text style={styles.optionTitle}>
             Upload ID Image
           </Text>
 
-
           <Text style={styles.optionSubtitle}>
             Choose the front of your ID from your device
           </Text>
-
         </View>
-
 
         <Ionicons
           name="chevron-forward"
@@ -1081,7 +1034,6 @@ export default function OnboardingCheckId() {
         />
 
       </TouchableOpacity>
-
 
       {/* ==================================================
           CAMERA BUTTON
@@ -1104,20 +1056,15 @@ export default function OnboardingCheckId() {
           color="#63D8FF"
         />
 
-
         <View style={styles.optionTextContainer}>
-
           <Text style={styles.optionTitle}>
             Take a Picture
           </Text>
 
-
           <Text style={styles.optionSubtitle}>
             Photograph the front of your ID
           </Text>
-
         </View>
-
 
         <Ionicons
           name="chevron-forward"
@@ -1126,7 +1073,6 @@ export default function OnboardingCheckId() {
         />
 
       </TouchableOpacity>
-
 
       {/* ==================================================
           VERIFICATION RESULT
@@ -1167,26 +1113,20 @@ export default function OnboardingCheckId() {
             }
           />
 
-
           <View style={styles.resultTextContainer}>
 
             <Text style={styles.resultTitle}>
-
               {verificationMatched
                 ? 'Information Matched'
                 : verificationMismatch
                 ? 'Information Does Not Match'
                 : 'Unable to Verify'}
-
             </Text>
 
-
             <Text style={styles.resultText}>
-
               {getIdentityVerificationMessage(
                 verificationResult
               )}
-
             </Text>
 
           </View>
@@ -1194,7 +1134,6 @@ export default function OnboardingCheckId() {
         </View>
 
       )}
-
 
       {/* ==================================================
           VERIFY BUTTON
@@ -1216,35 +1155,27 @@ export default function OnboardingCheckId() {
       >
 
         {verifying ? (
-
           <ActivityIndicator
             size="small"
             color="#FFFFFF"
           />
-
         ) : (
-
           <Ionicons
             name="shield-checkmark"
             size={23}
             color="#FFFFFF"
           />
-
         )}
 
-
         <Text style={styles.verifyButtonText}>
-
           {verifying
             ? 'VERIFYING...'
             : verificationMatched
             ? 'VERIFIED'
             : 'VERIFY ID'}
-
         </Text>
 
       </TouchableOpacity>
-
 
       {/* ==================================================
           PRIVACY NOTICE
@@ -1258,14 +1189,12 @@ export default function OnboardingCheckId() {
           color="#8C7AA8"
         />
 
-
         <Text style={styles.privacyText}>
           Your ID is submitted only for identity
           information verification.
         </Text>
 
       </View>
-
 
       {/* ==================================================
           BACK BUTTON
@@ -1286,7 +1215,6 @@ export default function OnboardingCheckId() {
           color="#B8A7FF"
         />
 
-
         <Text style={styles.backButtonText}>
           Back
         </Text>
@@ -1296,7 +1224,6 @@ export default function OnboardingCheckId() {
     </ScrollView>
   );
 }
-
 
 // ======================================================
 // STYLES
@@ -1310,7 +1237,6 @@ const styles =
       backgroundColor: '#05010B',
     },
 
-
     content: {
       flexGrow: 1,
       alignItems: 'center',
@@ -1319,7 +1245,6 @@ const styles =
       paddingBottom: 60,
     },
 
-
     // ==================================================
     // ICON
     // ==================================================
@@ -1327,20 +1252,14 @@ const styles =
     iconCircle: {
       width: 92,
       height: 92,
-
       borderRadius: 46,
-
       alignItems: 'center',
       justifyContent: 'center',
-
       backgroundColor: '#181028',
-
       borderWidth: 1,
       borderColor: '#7B42F6',
-
       marginBottom: 22,
     },
-
 
     // ==================================================
     // HEADER
@@ -1348,31 +1267,20 @@ const styles =
 
     title: {
       color: '#FFFFFF',
-
       fontSize: 32,
-
       fontWeight: 'bold',
-
       textAlign: 'center',
-
       marginBottom: 10,
     },
 
-
     subtitle: {
       maxWidth: 550,
-
       color: '#B8A7FF',
-
       fontSize: 16,
-
       lineHeight: 24,
-
       textAlign: 'center',
-
       marginBottom: 28,
     },
-
 
     // ==================================================
     // INFO CARD
@@ -1381,50 +1289,33 @@ const styles =
     infoCard: {
       width: '100%',
       maxWidth: 550,
-
       backgroundColor: '#181028',
-
       borderWidth: 1,
       borderColor: '#7B42F6',
-
       borderRadius: 20,
-
       padding: 20,
-
       marginBottom: 24,
     },
 
-
     infoHeader: {
       flexDirection: 'row',
-
       alignItems: 'center',
-
       marginBottom: 14,
     },
 
-
     infoTitle: {
       color: '#FFFFFF',
-
       fontSize: 18,
-
       fontWeight: '700',
-
       marginLeft: 10,
     },
 
-
     infoText: {
       color: '#C8BED7',
-
       fontSize: 15,
-
       lineHeight: 22,
-
       marginBottom: 9,
     },
-
 
     // ==================================================
     // UPLOAD AREA
@@ -1433,64 +1324,40 @@ const styles =
     uploadArea: {
       width: '100%',
       maxWidth: 550,
-
       minHeight: 210,
-
       alignItems: 'center',
       justifyContent: 'center',
-
       backgroundColor: '#12091F',
-
       borderWidth: 1,
-
       borderColor: '#7B42F6',
-
       borderStyle: 'dashed',
-
       borderRadius: 20,
-
       padding: 25,
-
       marginBottom: 20,
     },
 
-
     uploadTitle: {
       color: '#FFFFFF',
-
       fontSize: 20,
-
       fontWeight: '700',
-
       marginTop: 12,
-
       marginBottom: 8,
     },
 
-
     uploadText: {
       color: '#B8A7FF',
-
       fontSize: 14,
-
       lineHeight: 21,
-
       textAlign: 'center',
-
       maxWidth: 400,
     },
 
-
     webHint: {
       color: '#8C7AA8',
-
       fontSize: 13,
-
       textAlign: 'center',
-
       marginTop: 10,
     },
-
 
     // ==================================================
     // PREVIEW
@@ -1499,65 +1366,42 @@ const styles =
     previewContainer: {
       width: '100%',
       maxWidth: 550,
-
       backgroundColor: '#12091F',
-
       borderWidth: 1,
       borderColor: '#7B42F6',
-
       borderRadius: 20,
-
       padding: 16,
-
       marginBottom: 20,
     },
 
-
     previewTitle: {
       color: '#FFFFFF',
-
       fontSize: 17,
-
       fontWeight: '700',
-
       marginBottom: 12,
     },
 
-
     previewImage: {
       width: '100%',
-
       height: 280,
-
       backgroundColor: '#090510',
-
       borderRadius: 14,
     },
 
-
     removeButton: {
       flexDirection: 'row',
-
       alignItems: 'center',
-
       justifyContent: 'center',
-
       marginTop: 14,
-
       paddingVertical: 10,
     },
 
-
     removeButtonText: {
       color: '#FF7B8A',
-
       fontSize: 14,
-
       fontWeight: '600',
-
       marginLeft: 7,
     },
-
 
     // ==================================================
     // OPTION BUTTONS
@@ -1566,58 +1410,38 @@ const styles =
     optionButton: {
       width: '100%',
       maxWidth: 550,
-
       minHeight: 76,
-
       flexDirection: 'row',
-
       alignItems: 'center',
-
       backgroundColor: '#181028',
-
       borderWidth: 1,
-
       borderColor: '#7B42F6',
-
       borderRadius: 18,
-
       paddingHorizontal: 18,
-
       marginBottom: 14,
     },
-
 
     optionButtonDisabled: {
       opacity: 0.5,
     },
 
-
     optionTextContainer: {
       flex: 1,
-
       marginLeft: 14,
     },
 
-
     optionTitle: {
       color: '#FFFFFF',
-
       fontSize: 16,
-
       fontWeight: '700',
     },
 
-
     optionSubtitle: {
       color: '#9F91B8',
-
       fontSize: 13,
-
       lineHeight: 18,
-
       marginTop: 3,
     },
-
 
     // ==================================================
     // RESULT
@@ -1626,68 +1450,46 @@ const styles =
     resultCard: {
       width: '100%',
       maxWidth: 550,
-
       flexDirection: 'row',
-
       alignItems: 'flex-start',
-
       backgroundColor: '#181028',
-
       borderWidth: 1,
-
       borderColor: '#7B42F6',
-
       borderRadius: 18,
-
       padding: 18,
-
       marginTop: 4,
-
       marginBottom: 10,
     },
-
 
     resultCardSuccess: {
       borderColor: '#70E0A0',
     },
 
-
     resultCardMismatch: {
       borderColor: '#FF7B8A',
     },
-
 
     resultCardReview: {
       borderColor: '#FFD166',
     },
 
-
     resultTextContainer: {
       flex: 1,
-
       marginLeft: 12,
     },
 
-
     resultTitle: {
       color: '#FFFFFF',
-
       fontSize: 16,
-
       fontWeight: '700',
-
       marginBottom: 5,
     },
 
-
     resultText: {
       color: '#C8BED7',
-
       fontSize: 14,
-
       lineHeight: 20,
     },
-
 
     // ==================================================
     // VERIFY BUTTON
@@ -1696,48 +1498,30 @@ const styles =
     verifyButton: {
       width: '100%',
       maxWidth: 550,
-
       height: 65,
-
       flexDirection: 'row',
-
       alignItems: 'center',
-
       justifyContent: 'center',
-
       borderRadius: 20,
-
       backgroundColor: '#7B42F6',
-
       marginTop: 12,
-
       shadowColor: '#7B42F6',
-
       shadowOpacity: 0.6,
-
       shadowRadius: 18,
-
       elevation: 12,
     },
-
 
     verifyButtonDisabled: {
       opacity: 0.45,
     },
 
-
     verifyButtonText: {
       color: '#FFFFFF',
-
       fontSize: 17,
-
       fontWeight: 'bold',
-
       letterSpacing: 1,
-
       marginLeft: 9,
     },
-
 
     // ==================================================
     // PRIVACY
@@ -1746,31 +1530,20 @@ const styles =
     privacyRow: {
       width: '100%',
       maxWidth: 500,
-
       flexDirection: 'row',
-
       alignItems: 'center',
-
       justifyContent: 'center',
-
       marginTop: 18,
-
       paddingHorizontal: 10,
     },
 
-
     privacyText: {
       flex: 1,
-
       color: '#8C7AA8',
-
       fontSize: 12,
-
       lineHeight: 18,
-
       marginLeft: 7,
     },
-
 
     // ==================================================
     // BACK BUTTON
@@ -1778,24 +1551,16 @@ const styles =
 
     backButton: {
       flexDirection: 'row',
-
       alignItems: 'center',
-
       paddingHorizontal: 20,
-
       paddingVertical: 14,
-
       marginTop: 15,
     },
 
-
     backButtonText: {
       color: '#B8A7FF',
-
       fontSize: 15,
-
       fontWeight: '600',
-
       marginLeft: 7,
     },
   });
