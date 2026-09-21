@@ -3,6 +3,7 @@
 // =======================
 
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -126,6 +127,9 @@ const tabImages = {
 
   companion: require("../../assets/images/tabIcons/companion.png"),
 };
+
+// Central Park presentation map used by the automatic Companion hunt on web.
+const companionDemoMapImage = require("../../assets/images/map_image.png");
 
 const auraOptions = [
   { name: "Cosmic Rose", emoji: "💗", color: "#FF4FD8" },
@@ -289,116 +293,92 @@ const ENABLE_RELIC_TEST_MODE =
 const darkMapStyle = [
   {
     elementType: "geometry",
-
-    stylers: [
-      {
-        color: "#050518",
-      },
-    ],
+    stylers: [{ color: "#09051D" }],
   },
-
   {
     elementType: "labels.text.fill",
-
-    stylers: [
-      {
-        color: "#c9d7ff",
-      },
-    ],
+    stylers: [{ color: "#E9D5FF" }],
   },
-
   {
     elementType: "labels.text.stroke",
-
-    stylers: [
-      {
-        color: "#050518",
-      },
-    ],
+    stylers: [{ color: "#13082A" }],
   },
-
   {
-    featureType: "road",
-
-    elementType: "geometry",
-
-    stylers: [
-      {
-        color: "#1b1b3f",
-      },
-    ],
-  },
-
-  {
-    featureType: "road",
-
+    featureType: "administrative",
     elementType: "geometry.stroke",
-
-    stylers: [
-      {
-        color: "#4c2a91",
-      },
-    ],
+    stylers: [{ color: "#6D28D9" }],
   },
-
+  {
+    featureType: "road",
+    elementType: "geometry",
+    stylers: [{ color: "#43207A" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#A855F7" }],
+  },
   {
     featureType: "road.highway",
-
     elementType: "geometry",
-
-    stylers: [
-      {
-        color: "#20204f",
-      },
-    ],
+    stylers: [{ color: "#5B21B6" }],
   },
-
+  {
+    featureType: "road.highway",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#E879F9" }],
+  },
+  {
+    featureType: "road.local",
+    elementType: "geometry",
+    stylers: [{ color: "#35205F" }],
+  },
   {
     featureType: "water",
-
     elementType: "geometry",
-
-    stylers: [
-      {
-        color: "#06143f",
-      },
-    ],
+    stylers: [{ color: "#062B52" }],
   },
-
+  {
+    featureType: "water",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#67E8F9" }],
+  },
   {
     featureType: "poi.park",
-
     elementType: "geometry",
-
-    stylers: [
-      {
-        color: "#0b3b36",
-      },
-    ],
+    stylers: [{ color: "#103C43" }],
   },
-
   {
     featureType: "poi",
-
     elementType: "labels",
-
-    stylers: [
-      {
-        visibility: "off",
-      },
-    ],
+    stylers: [{ visibility: "off" }],
   },
-
   {
     featureType: "transit",
-
-    stylers: [
-      {
-        visibility: "off",
-      },
-    ],
+    stylers: [{ visibility: "off" }],
   },
 ];
+
+// =======================
+// COMPANION SEARCH DEMO
+// =======================
+
+type CompanionSearchState = "idle" | "traveling" | "found";
+
+const DEMO_COMPANION_ID = "ember-pup";
+const DEMO_COMPANION_STORAGE_KEY = "mission-trail:demo-companion-id:v1";
+const COMPANION_DEMO_DURATION_MS = 18000;
+
+function buildCompanionDemoRoute(origin: Coordinate): Coordinate[] {
+  return [
+    origin,
+    { latitude: origin.latitude + 0.00035, longitude: origin.longitude + 0.00030 },
+    { latitude: origin.latitude + 0.00060, longitude: origin.longitude + 0.00075 },
+    { latitude: origin.latitude + 0.00088, longitude: origin.longitude + 0.00115 },
+    { latitude: origin.latitude + 0.00115, longitude: origin.longitude + 0.00155 },
+    { latitude: origin.latitude + 0.00138, longitude: origin.longitude + 0.00195 },
+  ];
+}
 
 // =======================+
 // HOME SCREEN
@@ -445,6 +425,15 @@ export default function HomeScreen() {
   >(footprintOptions[0]);
   const [isFootprintModalOpen, setIsFootprintModalOpen] = useState(false);
   const [isRelicCardOpen, setIsRelicCardOpen] = useState(false);
+
+  // Presentation-only Companion hunt. This never writes to GPS history,
+  // verified distance, steps, missions, or relic collection.
+  const [companionSearchState, setCompanionSearchState] =
+    useState<CompanionSearchState>("idle");
+  const [companionDemoRoute, setCompanionDemoRoute] = useState<Coordinate[]>([]);
+  const [companionWalkerCoordinate, setCompanionWalkerCoordinate] =
+    useState<Coordinate | null>(null);
+  const companionDemoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [collectedRelicIds, setCollectedRelicIds] = useState<string[]>([]);
   const [isProgressLoaded, setIsProgressLoaded] = useState(false);
@@ -1153,6 +1142,71 @@ export default function HomeScreen() {
   }, [canUseMeetups]);
 
   // =====================
+  // COMPANION SEARCH DEMO
+  // =====================
+
+  const startCompanionSearch = useCallback(() => {
+    if (companionDemoTimerRef.current) {
+      clearInterval(companionDemoTimerRef.current);
+      companionDemoTimerRef.current = null;
+    }
+
+    // Use the visible player position when available. For an indoor/web
+    // presentation, use a harmless demo coordinate so the animation is reliable.
+    const origin = playerCoordinate ?? { latitude: 37.9101, longitude: -122.0652 };
+    const route = buildCompanionDemoRoute(origin);
+
+    setCompanionDemoRoute(route);
+    setCompanionWalkerCoordinate(route[0]);
+    setCompanionSearchState("traveling");
+
+    mapRef.current?.fitToCoordinates?.(route, {
+      edgePadding: { top: 180, right: 80, bottom: 150, left: 80 },
+      animated: true,
+    });
+
+    const startedAt = Date.now();
+
+    companionDemoTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const progress = Math.min(1, elapsed / COMPANION_DEMO_DURATION_MS);
+      const scaled = progress * (route.length - 1);
+      const segmentIndex = Math.min(route.length - 2, Math.floor(scaled));
+      const segmentProgress = Math.min(1, scaled - segmentIndex);
+      const from = route[segmentIndex];
+      const to = route[segmentIndex + 1];
+
+      setCompanionWalkerCoordinate({
+        latitude: from.latitude + (to.latitude - from.latitude) * segmentProgress,
+        longitude: from.longitude + (to.longitude - from.longitude) * segmentProgress,
+      });
+
+      if (progress >= 1) {
+        if (companionDemoTimerRef.current) {
+          clearInterval(companionDemoTimerRef.current);
+          companionDemoTimerRef.current = null;
+        }
+
+        setCompanionWalkerCoordinate(route[route.length - 1]);
+        setCompanionSearchState("found");
+        void AsyncStorage.setItem(DEMO_COMPANION_STORAGE_KEY, DEMO_COMPANION_ID);
+        Alert.alert(
+          "COMPANION FOUND",
+          "You collected a Companion! It has been registered to your presentation profile.",
+        );
+      }
+    }, 50);
+  }, [playerCoordinate]);
+
+  useEffect(() => {
+    return () => {
+      if (companionDemoTimerRef.current) {
+        clearInterval(companionDemoTimerRef.current);
+      }
+    };
+  }, []);
+
+  // =====================
   // SCREEN
   // =====================
 
@@ -1168,7 +1222,7 @@ export default function HomeScreen() {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
-        customMapStyle={Platform.OS === "android" ? darkMapStyle : undefined}
+        customMapStyle={Platform.OS !== "web" ? darkMapStyle : undefined}
         mapType="standard"
         initialRegion={mapRegion ?? undefined}
         showsUserLocation={false}
@@ -1230,6 +1284,36 @@ export default function HomeScreen() {
               secureRelicField.huntStage,
             )}
 
+        {companionDemoRoute.length > 1 ? (
+          <>
+            <Polyline
+              coordinates={companionDemoRoute}
+              strokeColor="#19D8FF"
+              strokeWidth={6}
+            />
+            <Marker
+              coordinate={companionDemoRoute[companionDemoRoute.length - 1]}
+              title="Companion"
+              description="Companion destination"
+              pinColor="#FF2DF7"
+              zIndex={20}
+            />
+          </>
+        ) : null}
+
+        {companionWalkerCoordinate ? (
+          <Marker
+            coordinate={companionWalkerCoordinate}
+            title="Explorer"
+            zIndex={25}
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <View style={styles.companionWalkerMarker}>
+              <Ionicons name="walk" size={22} color="#FFFFFF" />
+            </View>
+          </Marker>
+        ) : null}
+
         {visibleMapMeetups.map((meetup) => (
           <MeetupMapMarker
             key={meetup.id}
@@ -1242,6 +1326,14 @@ export default function HomeScreen() {
           />
         ))}
       </MapView>
+
+      {Platform.OS === "web" && companionSearchState !== "idle" ? (
+        <WebCompanionDemoMap
+          route={companionDemoRoute}
+          walkerCoordinate={companionWalkerCoordinate}
+          state={companionSearchState}
+        />
+      ) : null}
 
       {/* ===================
           COSMIC OVERLAY
@@ -1293,31 +1385,40 @@ export default function HomeScreen() {
             () => setTrackingRestartKey((current) => current + 1),
           )}
 
-          {ENABLE_RELIC_TEST_MODE ? (
-            <RelicDistanceCard
-              relic={nearestRelic?.relic ?? null}
-              distanceMeters={distanceToRelic}
-              direction={relicDirection}
-              canCollect={canCollectRelic}
-              isProgressLoaded={isProgressLoaded}
-              isCollecting={collectingRelicId !== null}
-              testModeEnabled
-              onCollect={() => handleCollectRelic(false)}
-              onTestCollect={() => handleCollectRelic(true)}
+          <View style={styles.huntCardsRow}>
+            <View style={styles.huntCardColumn}>
+              {ENABLE_RELIC_TEST_MODE ? (
+                <RelicDistanceCard
+                  relic={nearestRelic?.relic ?? null}
+                  distanceMeters={distanceToRelic}
+                  direction={relicDirection}
+                  canCollect={canCollectRelic}
+                  isProgressLoaded={isProgressLoaded}
+                  isCollecting={collectingRelicId !== null}
+                  testModeEnabled
+                  onCollect={() => handleCollectRelic(false)}
+                  onTestCollect={() => handleCollectRelic(true)}
+                />
+              ) : (
+                <SecureRelicCard
+                  field={secureRelicField}
+                  navigationDirection={
+                    compassBearing === null
+                      ? null
+                      : getCardinalDirection(compassBearing)
+                  }
+                  navigationBearing={compassBearing}
+                  expanded={isRelicCardOpen}
+                  onExpandedChange={setIsRelicCardOpen}
+                />
+              )}
+            </View>
+
+            <CompanionSearchCard
+              state={companionSearchState}
+              onScan={startCompanionSearch}
             />
-          ) : (
-            <SecureRelicCard
-              field={secureRelicField}
-              navigationDirection={
-                compassBearing === null
-                  ? null
-                  : getCardinalDirection(compassBearing)
-              }
-              navigationBearing={compassBearing}
-              expanded={isRelicCardOpen}
-              onExpandedChange={setIsRelicCardOpen}
-            />
-          )}
+          </View>
         </View>
 
         {/* SIDE BUTTONS */}
@@ -2955,10 +3056,177 @@ function renderGpsStatusBadge(
   );
 }
 // =======================
+// WEB COMPANION DEMO MAP
+// =======================
+
+// The project intentionally replaces react-native-maps with harmless Views on web.
+// This presentation layer gives localhost a visible Mission Trail map demo while
+// native iOS/Android continue using the real MapView, Marker and Polyline above.
+function WebCompanionDemoMap({
+  route,
+  walkerCoordinate,
+  state,
+}: {
+  route: Coordinate[];
+  walkerCoordinate: Coordinate | null;
+  state: CompanionSearchState;
+}) {
+  if (route.length < 2) {
+    return null;
+  }
+
+  const start = route[0];
+  const destination = route[route.length - 1];
+  const current = walkerCoordinate ?? start;
+
+  // Convert the existing timer-driven coordinate animation into a 0..1 value.
+  // The actual presentation path is intentionally drawn over the Central Park
+  // image instead of pretending the background image is a live GPS map.
+  const latitudeSpan = Math.max(
+    0.000001,
+    Math.abs(destination.latitude - start.latitude),
+  );
+  const longitudeSpan = Math.max(
+    0.000001,
+    Math.abs(destination.longitude - start.longitude),
+  );
+  const latitudeProgress = Math.abs(current.latitude - start.latitude) / latitudeSpan;
+  const longitudeProgress =
+    Math.abs(current.longitude - start.longitude) / longitudeSpan;
+  const progress = Math.max(0, Math.min(1, (latitudeProgress + longitudeProgress) / 2));
+
+  // The square map is centered inside the browser. These percentages place the
+  // explorer near W 59th St and move them a short distance into Central Park,
+  // ending at the Companion marker already visible in map_image.png.
+  // Finish with the blue explorer marker directly against the LEFT EDGE of
+  // the purple Companion circle baked into map_image.png.  The two circles
+  // touch instead of leaving the explorer stranded too far to the left.
+  const explorerLeft = 39.2 + progress * 6.8;
+  const explorerTop = 95.0 - progress * 7.3;
+
+  return (
+    <View style={styles.webCompanionMap} pointerEvents="none">
+      {/* Fill the widescreen edges with the same artwork so there are no blank bars. */}
+      <Image
+        source={companionDemoMapImage}
+        style={styles.webCompanionMapBackdrop}
+        resizeMode="cover"
+        blurRadius={8}
+      />
+      <View style={styles.webCompanionMapBackdropShade} />
+
+      {/* Keep one complete, undistorted Central Park map visible in the center. */}
+      <Image
+        source={companionDemoMapImage}
+        style={styles.webCompanionMapImage}
+        resizeMode="contain"
+      />
+
+      {/* Short glowing path from 59th Street into the park. */}
+
+      <View style={styles.webStartMarker}>
+        <Ionicons name="location" size={18} color="#19D8FF" />
+        <Text style={styles.webMarkerCaption}>YOU ARE HERE</Text>
+      </View>
+
+      <View
+        style={[
+          styles.webExplorerMarker,
+          {
+            left: `${explorerLeft}%` as any,
+            top: `${explorerTop}%` as any,
+          },
+        ]}
+      >
+        <Ionicons name="walk" size={24} color="#FFFFFF" />
+      </View>
+
+      {state === "found" ? (
+        <View style={styles.webFoundCompanion}>
+          <Text style={styles.webFoundCompanionEmoji}>🐓</Text>
+          <Text style={styles.webFoundCompanionText}>COMPANION FOUND</Text>
+        </View>
+      ) : null}
+
+      <View style={styles.webDemoBadge}>
+        <Ionicons
+          name={state === "found" ? "save-outline" : "navigate"}
+          size={15}
+          color={state === "found" ? "#86EFAC" : "#19D8FF"}
+        />
+        <Text style={styles.webDemoBadgeText}>
+          {state === "found"
+            ? "SAVE COMPANION"
+            : "AUTO-TRACKING COMPANION"}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// =======================
 // SIDE MAP BUTTONS
 // =======================
 
 // Purpose: Renders the side map buttons interface.
+function CompanionSearchCard({
+  state,
+  onScan,
+}: {
+  state: CompanionSearchState;
+  onScan: () => void;
+}) {
+  const isTraveling = state === "traveling";
+  const isFound = state === "found";
+
+  return (
+    <View style={styles.companionSearchCard}>
+      <View style={styles.companionSearchHeader}>
+        <Ionicons name="sparkles" size={15} color="#FF63F7" />
+        <Text style={styles.companionSearchEyebrow}>HIDDEN COMPANION</Text>
+        <Ionicons name="cellular" size={18} color="#A855F7" />
+      </View>
+
+      <Text style={styles.companionSearchTitle}>
+        {isFound ? "COMPANION FOUND" : isTraveling ? "TRACKING" : "SEARCHING"}
+      </Text>
+      <Text style={styles.companionSearchSignal}>
+        {isFound
+          ? "COMPANION SUCCESSFULLY COLLECTED"
+          : isTraveling
+            ? "FOLLOWING COMPANION SIGNAL"
+            : "SEARCHING FOR A COMPANION"}
+      </Text>
+      <Text style={styles.companionSearchCopy}>
+        {isFound
+          ? "Your new Companion has been registered."
+          : isTraveling
+            ? "Your explorer is automatically following the route."
+            : "Scan the area to locate a nearby Companion."}
+      </Text>
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Scan for Companion"
+        disabled={isTraveling}
+        onPress={onScan}
+        style={({ pressed }) => [
+          styles.companionScanButton,
+          isTraveling && styles.companionScanButtonDisabled,
+          pressed && styles.pressed,
+        ]}
+      >
+        <Ionicons name={isFound ? "checkmark-circle" : "scan"} size={16} color="#FFFFFF" />
+        <Text style={styles.companionScanButtonText}>
+          {isFound ? "SCAN AGAIN" : isTraveling ? "TRACKING..." : "SCAN FOR COMPANION"}
+        </Text>
+      </Pressable>
+
+      <Text style={styles.companionSearchDetails}>Details⌄</Text>
+    </View>
+  );
+}
+
 function SideMapButtons({
   onZoomOut,
   onCenterMap,
@@ -3230,6 +3498,235 @@ const styles = StyleSheet.create({
     right: sidePadding,
 
     gap: 9,
+  },
+
+
+  huntCardsRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+
+  huntCardColumn: {
+    width: isSmallPhone ? 245 : 286,
+  },
+
+  companionSearchCard: {
+    width: isSmallPhone ? 245 : 286,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "rgba(168, 85, 247, 0.9)",
+    backgroundColor: "rgba(7, 4, 28, 0.96)",
+    padding: 10,
+    shadowColor: "#A855F7",
+    shadowOpacity: 0.38,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+
+  companionSearchHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+
+  companionSearchEyebrow: {
+    flex: 1,
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.7,
+  },
+
+  companionSearchTitle: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "900",
+    marginTop: 8,
+  },
+
+  companionSearchSignal: {
+    color: "#FF4FD8",
+    fontSize: 9,
+    fontWeight: "900",
+    marginTop: 4,
+  },
+
+  companionSearchCopy: {
+    color: "#C7BDD3",
+    fontSize: 8,
+    marginTop: 3,
+  },
+
+  companionScanButton: {
+    minHeight: 36,
+    marginTop: 8,
+    borderRadius: 8,
+    backgroundColor: "#7C3AED",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+
+  companionScanButtonDisabled: {
+    opacity: 0.72,
+  },
+
+  companionScanButtonText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+
+  companionSearchDetails: {
+    color: "#FFFFFF",
+    fontSize: 8,
+    fontWeight: "800",
+    textAlign: "center",
+    marginTop: 7,
+  },
+
+  webCompanionMap: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: "hidden",
+    backgroundColor: "#09051D",
+    zIndex: 1,
+  },
+
+  webCompanionMapBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    width: "100%",
+    height: "100%",
+    opacity: 0.38,
+  },
+
+  webCompanionMapBackdropShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(8, 3, 30, 0.40)",
+  },
+
+  webCompanionMapImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: "100%",
+    height: "100%",
+  },
+
+  webCompanionRouteGlow: {
+    position: "absolute",
+    left: "42.7%",
+    top: "87.0%",
+    width: 7,
+    height: "9.5%",
+    borderRadius: 999,
+    backgroundColor: "#19D8FF",
+    shadowColor: "#FF2DF7",
+    shadowOpacity: 1,
+    shadowRadius: 14,
+    transform: [{ rotate: "-48deg" }],
+    transformOrigin: "bottom center",
+  },
+
+  webStartMarker: {
+    position: "absolute",
+    left: "36.0%",
+    top: "94%",
+    alignItems: "center",
+    gap: 3,
+  },
+
+  webMarkerCaption: {
+    color: "#67E8F9",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.7,
+    textShadowColor: "#07111F",
+    textShadowRadius: 5,
+  },
+
+  webExplorerMarker: {
+    position: "absolute",
+    width: 42,
+    height: 42,
+    marginLeft: -21,
+    marginTop: -21,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#075985",
+    borderWidth: 2,
+    borderColor: "#19D8FF",
+    shadowColor: "#19D8FF",
+    shadowOpacity: 1,
+    shadowRadius: 13,
+    zIndex: 10,
+  },
+
+  webFoundCompanion: {
+    position: "absolute",
+    left: "42%",
+    top: "82%",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#FF63F7",
+    backgroundColor: "rgba(69, 10, 96, 0.92)",
+    shadowColor: "#FF2DF7",
+    shadowOpacity: 1,
+    shadowRadius: 15,
+    zIndex: 12,
+  },
+
+  webFoundCompanionEmoji: {
+    fontSize: 30,
+  },
+
+  webFoundCompanionText: {
+    marginTop: 3,
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.7,
+  },
+
+  webDemoBadge: {
+    position: "absolute",
+    right: 82,
+    bottom: 105,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#A855F7",
+    backgroundColor: "rgba(7, 4, 28, 0.90)",
+    zIndex: 15,
+  },
+
+  webDemoBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+
+  companionWalkerMarker: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#19D8FF",
+    backgroundColor: "#69227E",
+    shadowColor: "#19D8FF",
+    shadowOpacity: 0.8,
+    shadowRadius: 10,
+    elevation: 10,
   },
 
   bottomOverlay: {
