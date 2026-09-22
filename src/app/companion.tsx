@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router as expoRouter, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useRef, useState, type ComponentProps } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 
 import {
   Alert,
@@ -397,15 +397,122 @@ export default function CompanionScreen() {
 
   // Purpose: Receives the temporary companion from
   // the Egg Hatch presentation demo.
-  const { demoCompanionId } =
+  const { demoCompanionId, companionId } =
     useLocalSearchParams<{
       demoCompanionId?: string | string[];
+      companionId?: string | string[];
     }>();
 
   const normalizedDemoCompanionId =
     Array.isArray(demoCompanionId)
       ? demoCompanionId[0]
       : demoCompanionId;
+
+  const normalizedCompanionId =
+    Array.isArray(companionId)
+      ? companionId[0]
+      : companionId;
+
+  type DatabaseCompanion = {
+    id: string;
+    companion_key: string;
+    name: string;
+    description: string | null;
+    rarity: string | null;
+    model_path: string | null;
+    thumbnail_path: string | null;
+  };
+
+  type DatabaseOwnership = {
+    id: string;
+    companion_id: string;
+    level: number;
+    xp: number;
+    bond: number;
+    energy: number;
+    hunger: number;
+    happiness: number;
+    health: number;
+    discovered_at: string;
+  };
+
+  const [databaseCompanion, setDatabaseCompanion] = useState<DatabaseCompanion | null>(null);
+  const [databaseOwnership, setDatabaseOwnership] = useState<DatabaseOwnership | null>(null);
+  const [databaseCompanionLoading, setDatabaseCompanionLoading] = useState(false);
+  const [databaseCompanionError, setDatabaseCompanionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadSelectedCompanion() {
+      if (!normalizedCompanionId) {
+        if (isActive) {
+          setDatabaseCompanion(null);
+          setDatabaseOwnership(null);
+          setDatabaseCompanionError(null);
+          setDatabaseCompanionLoading(false);
+        }
+        return;
+      }
+
+      setDatabaseCompanionLoading(true);
+      setDatabaseCompanionError(null);
+
+      try {
+        const { data: authData, error: authError } = await supabase.auth.getUser();
+        if (authError) throw authError;
+        if (!authData.user) throw new Error('You must be signed in to view this companion.');
+
+        const [catalogResult, ownershipResult] = await Promise.all([
+          supabase
+            .from('companions')
+            .select('id, companion_key, name, description, rarity, model_path, thumbnail_path')
+            .eq('id', normalizedCompanionId)
+            .single(),
+          supabase
+            .from('user_companions')
+            .select('id, companion_id, level, xp, bond, energy, hunger, happiness, health, discovered_at')
+            .eq('user_id', authData.user.id)
+            .eq('companion_id', normalizedCompanionId)
+            .single(),
+        ]);
+
+        if (catalogResult.error) throw catalogResult.error;
+        if (ownershipResult.error) throw ownershipResult.error;
+
+        if (isActive) {
+          setDatabaseCompanion(catalogResult.data as DatabaseCompanion);
+          setDatabaseOwnership(ownershipResult.data as DatabaseOwnership);
+        }
+      } catch (error) {
+        console.warn('[Companion] Could not load selected companion.', error);
+        if (isActive) {
+          setDatabaseCompanion(null);
+          setDatabaseOwnership(null);
+          setDatabaseCompanionError('Could not load this companion from your Vault.');
+        }
+      } finally {
+        if (isActive) setDatabaseCompanionLoading(false);
+      }
+    }
+
+    void loadSelectedCompanion();
+    return () => { isActive = false; };
+  }, [normalizedCompanionId]);
+
+  const databaseModelUrl = useMemo(() => {
+    const modelPath = databaseCompanion?.model_path?.trim();
+    if (!modelPath) return null;
+    if (/^https?:\/\//i.test(modelPath)) return modelPath;
+
+    const normalizedPath = modelPath
+      .replace(/^companion-models\//, '')
+      .replace(/^\/+/, '');
+
+    return supabase.storage
+      .from('companion-models')
+      .getPublicUrl(normalizedPath).data.publicUrl;
+  }, [databaseCompanion?.model_path]);
 
 
   const {
@@ -452,59 +559,48 @@ export default function CompanionScreen() {
 
   const companion = progress?.companion;
 
-  // Purpose: Finds the temporary hatched companion
-  // when no permanent active companion exists yet.
   const demoCompanionDefinition =
     normalizedDemoCompanionId
-      ? getCompanionById(
-          normalizedDemoCompanionId
-        )
+      ? getCompanionById(normalizedDemoCompanionId)
       : undefined;
 
+  const databaseLocalDefinition = databaseCompanion?.companion_key
+    ? getCompanionById(databaseCompanion.companion_key)
+    : undefined;
+
   const effectiveCompanionId =
+    databaseCompanion?.companion_key ??
     companion?.companionId ??
     demoCompanionDefinition?.id;
 
-  const isPresentationDemo =
-    Boolean(
-      !companion?.companionId &&
-      demoCompanionDefinition
-    );
+  const isPresentationDemo = Boolean(
+    !databaseCompanion &&
+    !companion?.companionId &&
+    demoCompanionDefinition,
+  );
 
   const companionName =
-    formatCompanionName(
-      effectiveCompanionId
-    ) ??
+    databaseCompanion?.name ??
+    formatCompanionName(effectiveCompanionId) ??
     demoCompanionDefinition?.name ??
     'Your Companion';
 
   const companionDefinition =
-    effectiveCompanionId
-      ? getCompanionById(
-          effectiveCompanionId
-        )
-      : undefined;
+    databaseLocalDefinition ??
+    (effectiveCompanionId ? getCompanionById(effectiveCompanionId) : undefined);
 
-  const bondPercent =
-    clampPercent(
-      companion?.bondPercent ??
-        (
-          isPresentationDemo
-            ? demoBondPercent
-            : 0
-        )
-    );
+  const bondPercent = clampPercent(
+    databaseOwnership?.bond ??
+    companion?.bondPercent ??
+    (isPresentationDemo ? demoBondPercent : 0),
+  );
 
-  const energyPercent =
-    isPresentationDemo
+  const energyPercent = databaseOwnership
+    ? clampPercent(databaseOwnership.energy)
+    : isPresentationDemo
       ? demoEnergyPercent
-      : getEnergyPercent(
-          companion?.energy ?? 0,
-          companion?.maximumEnergy ?? 100,
-        );
+      : getEnergyPercent(companion?.energy ?? 0, companion?.maximumEnergy ?? 100);
 
-  // Purpose: Temporary care stats for the 2D presentation
-  // companion. Real backend values can replace these later.
   const companionCareData =
     companion as unknown as
       | {
@@ -515,42 +611,30 @@ export default function CompanionScreen() {
         }
       | undefined;
 
-  const hungerPercent =
-    isPresentationDemo
+  const hungerPercent = databaseOwnership
+    ? clampPercent(databaseOwnership.hunger)
+    : isPresentationDemo
       ? 78
-      : clampPercent(
-          Number(
-            companionCareData?.hungerPercent ?? 0
-          )
-        );
+      : clampPercent(Number(companionCareData?.hungerPercent ?? 0));
 
-  const happinessPercent =
-    isPresentationDemo
+  const happinessPercent = databaseOwnership
+    ? clampPercent(databaseOwnership.happiness)
+    : isPresentationDemo
       ? 86
-      : clampPercent(
-          Number(
-            companionCareData?.happinessPercent ?? 0
-          )
-        );
+      : clampPercent(Number(companionCareData?.happinessPercent ?? 0));
 
-  const healthPercent =
-    isPresentationDemo
+  const healthPercent = databaseOwnership
+    ? clampPercent(databaseOwnership.health)
+    : isPresentationDemo
       ? 92
-      : clampPercent(
-          Number(
-            companionCareData?.healthPercent ?? 0
-          )
-        );
+      : clampPercent(Number(companionCareData?.healthPercent ?? 0));
 
-  const careStreak =
-    isPresentationDemo
-      ? 3
-      : Math.max(
-          0,
-          Number(
-            companionCareData?.careStreak ?? 0
-          )
-        );
+  const careStreak = isPresentationDemo
+    ? 3
+    : Math.max(0, Number(companionCareData?.careStreak ?? 0));
+
+  const selectedCompanionLevel = databaseOwnership?.level ?? null;
+  const selectedCompanionXp = databaseOwnership?.xp ?? null;
 
   const playerLevel =
     getPlayerLevelProgress(progress?.totalXp ?? 0);
@@ -1180,7 +1264,8 @@ export default function CompanionScreen() {
           <HomeView
             companionName={companionName}
             companionDefinition={companionDefinition}
-            isLoading={isLoading}
+            modelUrl={databaseModelUrl}
+            isLoading={isLoading || databaseCompanionLoading}
             hasCompanion={Boolean(effectiveCompanionId)}
             bondPercent={bondPercent}
             bondTier={companion?.bondTier ?? 1}
@@ -1189,8 +1274,8 @@ export default function CompanionScreen() {
             happinessPercent={happinessPercent}
             healthPercent={healthPercent}
             careStreak={careStreak}
-            totalXp={playerLevel.totalXp}
-            playerLevel={playerLevel.level}
+            totalXp={selectedCompanionXp ?? playerLevel.totalXp}
+            playerLevel={selectedCompanionLevel ?? playerLevel.level}
             todayDistanceKm={todayDistanceKm}
             todaySteps={todaySteps}
             menuOpen={menuOpen}
@@ -1295,6 +1380,15 @@ export default function CompanionScreen() {
           />
         ) : null}
 
+        {databaseCompanionError ? (
+          <View style={styles.syncMessage}>
+            <Ionicons name="warning-outline" size={17} color="#FFC96B" />
+            <Text selectable style={styles.syncMessageText}>
+              {databaseCompanionError}
+            </Text>
+          </View>
+        ) : null}
+
         {message ? (
           <View style={styles.syncMessage}>
             <Ionicons
@@ -1329,6 +1423,7 @@ export default function CompanionScreen() {
 function HomeView({
   companionName,
   companionDefinition,
+  modelUrl,
   isLoading,
   hasCompanion,
   bondPercent,
@@ -1357,6 +1452,7 @@ function HomeView({
   companionDefinition:
     | ReturnType<typeof getCompanionById>
     | undefined;
+  modelUrl: string | null;
   isLoading: boolean;
   hasCompanion: boolean;
   bondPercent: number;
@@ -1569,7 +1665,7 @@ function HomeView({
                   },
                 ]}
               >
-                <Companion3DViewer model="/glbModels/TheMaintis.glb" />
+                <Companion3DViewer model={modelUrl ?? '/glbModels/TheMaintis.glb'} />
               </Animated.View>
             </View>
           </LinearGradient>

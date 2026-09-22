@@ -5,99 +5,125 @@ import { StyleSheet, View } from "react-native";
 
 import { Canvas } from "@react-three/fiber";
 import { useAnimations, useGLTF } from "@react-three/drei";
+import { LoopRepeat } from "three";
 
 
 // ====================================================
-// MODEL
+// TYPES
 // ====================================================
 
-const MODEL_PATH = "/glbModels/Draggon.glb";
+type Companion3DViewerProps = {
+  // Local GLB path or full Supabase Storage URL.
+  model?: string | null;
+
+  // Animation speed:
+  // 0.5 = half speed
+  // 1   = normal speed
+  // 2   = twice as fast
+  animationSpeed?: number;
+
+  // Model size.
+  scale?: number;
+
+  // X, Y, Z position.
+  position?: [number, number, number];
+
+  // X, Y, Z rotation.
+  rotation?: [number, number, number];
+};
 
 
 // ====================================================
-// ⭐⭐⭐ ANIMATION SPEED CONTROL ⭐⭐⭐
+// FALLBACK MODEL
 // ====================================================
 //
-// Change this number to control animation speed.
+// This model is used only when no model is passed
+// into the component.
+//
+// This keeps older Companion3DViewer usages working
+// while Mission Trail is moved to database-controlled
+// Companion models.
+//
+// ====================================================
+
+const FALLBACK_MODEL_PATH =
+  "/glbModels/Draggon.glb";
+
+
+// ====================================================
+// ⭐⭐⭐ DEFAULT ANIMATION SPEED ⭐⭐⭐
+// ====================================================
 //
 // 0.5 = half speed
 // 1   = normal speed
 // 2   = twice as fast
-// 5   = five times as fast
 //
 // ====================================================
 
-const ANIMATION_SPEED = 1;
+const DEFAULT_ANIMATION_SPEED = 1;
 
 
 // ====================================================
-// ⭐⭐⭐ MODEL SIZE CONTROL ⭐⭐⭐
+// ⭐⭐⭐ DEFAULT MODEL SIZE ⭐⭐⭐
 // ====================================================
-//
-// THIS CONTROLS HOW BIG THE DRAGON APPEARS.
 //
 // 1   = original size
 // 1.5 = 50% bigger
 // 2   = twice as big
-// 2.5 = two-and-a-half times as big
-// 3   = three times as big
-// 4   = four times as big
-//
-// Change ONLY this number to resize the dragon.
 //
 // ====================================================
 
-const MODEL_SCALE = 1.5;
+const DEFAULT_MODEL_SCALE = 1.5;
 
 
 // ====================================================
-// ⭐⭐⭐ MODEL POSITION CONTROL ⭐⭐⭐
+// ⭐⭐⭐ DEFAULT MODEL POSITION ⭐⭐⭐
 // ====================================================
 //
 // X = left / right
 // Y = up / down
 // Z = forward / backward
 //
-// Example:
+// ====================================================
+
+const DEFAULT_MODEL_POSITION: [
+  number,
+  number,
+  number
+] = [
+  0,
+  0,
+  0,
+];
+
+
+// ====================================================
+// ⭐⭐⭐ DEFAULT MODEL ROTATION ⭐⭐⭐
+// ====================================================
 //
-// [0, 0.2, 0]
-//
-// moves the dragon slightly upward.
+// Values are in radians.
 //
 // ====================================================
 
-const MODEL_POSITION_X = 0;
-const MODEL_POSITION_Y = 0;
-const MODEL_POSITION_Z = 0;
-
-
-// ====================================================
-// ⭐⭐⭐ MODEL ROTATION CONTROL ⭐⭐⭐
-// ====================================================
-//
-// These values are in radians.
-//
-// Usually leave these at 0 unless the model
-// needs to be turned.
-//
-// ====================================================
-
-const MODEL_ROTATION_X = 0;
-const MODEL_ROTATION_Y = 0;
-const MODEL_ROTATION_Z = 0;
+const DEFAULT_MODEL_ROTATION: [
+  number,
+  number,
+  number
+] = [
+  0,
+  0,
+  0,
+];
 
 
 // ====================================================
 // ⭐⭐⭐ CAMERA CONTROL ⭐⭐⭐
 // ====================================================
 //
-// CAMERA_Z controls how far the camera is
-// from the dragon.
+// CAMERA_Z:
 //
-// Smaller number = camera closer = dragon looks bigger
-// Larger number  = camera farther = dragon looks smaller
-//
-// Normally resize with MODEL_SCALE first.
+// Smaller number = camera closer
+// Larger number  = camera farther away
 //
 // ====================================================
 
@@ -112,10 +138,46 @@ const CAMERA_FOV = 45;
 // GLB MODEL
 // ====================================================
 
-function GLBModel() {
-  const gltf = useGLTF(MODEL_PATH);
+function GLBModel({
+  model,
+  animationSpeed,
+  scale,
+  position,
+  rotation,
+}: {
+  model: string;
+  animationSpeed: number;
+  scale: number;
+  position: [number, number, number];
+  rotation: [number, number, number];
+}) {
 
-  const { actions, names } = useAnimations(
+  // ==================================================
+  // LOAD MODEL
+  // ==================================================
+  //
+  // "model" can now be either:
+  //
+  // /glbModels/Draggon.glb
+  //
+  // OR:
+  //
+  // https://xxxxx.supabase.co/storage/v1/object/public/
+  // companion-models/Draggon.glb
+  //
+  // ==================================================
+
+  const gltf = useGLTF(model);
+
+
+  // ==================================================
+  // LOAD ANIMATIONS FROM GLB
+  // ==================================================
+
+  const {
+    actions,
+    names,
+  } = useAnimations(
     gltf.animations,
     gltf.scene
   );
@@ -126,20 +188,36 @@ function GLBModel() {
   // ==================================================
 
   useEffect(() => {
+
+    // Use the first animation contained in the GLB.
     const animationName = names[0];
 
+
+    // ================================================
+    // NO ANIMATION FOUND
+    // ================================================
+
     if (!animationName) {
+
       console.warn(
-        "[Companion3DViewer] No animation found in GLB."
+        "[Companion3DViewer] No animation found in GLB:",
+        model
       );
 
       return;
     }
 
 
-    const action = actions[animationName];
+    // ================================================
+    // GET ANIMATION
+    // ================================================
+
+    const action =
+      actions[animationName];
+
 
     if (!action) {
+
       console.warn(
         "[Companion3DViewer] Animation action could not be created:",
         animationName
@@ -150,36 +228,72 @@ function GLBModel() {
 
 
     console.log(
+      "[Companion3DViewer] Loaded model:",
+      model
+    );
+
+
+    console.log(
       "[Companion3DViewer] Playing animation:",
       animationName
     );
 
+
     console.log(
       "[Companion3DViewer] Animation speed:",
-      ANIMATION_SPEED
+      animationSpeed
     );
 
 
-    // Reset animation to beginning.
+    // ================================================
+    // RESET ANIMATION
+    // ================================================
+
     action.reset();
 
 
-    // Apply animation speed.
+    // ================================================
+    // SET ANIMATION SPEED
+    // ================================================
+
     action.setEffectiveTimeScale(
-      ANIMATION_SPEED
+      animationSpeed
     );
 
 
-    // Start animation.
+    // ================================================
+    // LOOP ANIMATION FOREVER
+    // ================================================
+
+    action.setLoop(
+      LoopRepeat,
+      Infinity
+    );
+
+
+    // ================================================
+    // START ANIMATION
+    // ================================================
+
     action.play();
 
 
-    // Stop animation when component is removed.
+    // ================================================
+    // CLEANUP
+    // ================================================
+
     return () => {
+
       action.stop();
+
     };
 
-  }, [actions, names]);
+  }, [
+    actions,
+    names,
+    animationSpeed,
+    model,
+  ]);
 
 
   // ==================================================
@@ -187,23 +301,17 @@ function GLBModel() {
   // ==================================================
 
   return (
+
     <primitive
       object={gltf.scene}
 
-      scale={MODEL_SCALE}
+      scale={scale}
 
-      position={[
-        MODEL_POSITION_X,
-        MODEL_POSITION_Y,
-        MODEL_POSITION_Z,
-      ]}
+      position={position}
 
-      rotation={[
-        MODEL_ROTATION_X,
-        MODEL_ROTATION_Y,
-        MODEL_ROTATION_Z,
-      ]}
+      rotation={rotation}
     />
+
   );
 }
 
@@ -212,9 +320,37 @@ function GLBModel() {
 // COMPANION 3D VIEWER
 // ====================================================
 
-export default function Companion3DViewer() {
+export default function Companion3DViewer({
+  model,
+  animationSpeed = DEFAULT_ANIMATION_SPEED,
+  scale = DEFAULT_MODEL_SCALE,
+  position = DEFAULT_MODEL_POSITION,
+  rotation = DEFAULT_MODEL_ROTATION,
+}: Companion3DViewerProps) {
+
+  // ==================================================
+  // DETERMINE WHICH MODEL TO LOAD
+  // ==================================================
+  //
+  // If companion.tsx supplies a model URL, use it.
+  //
+  // Otherwise fall back to the existing local dragon.
+  //
+  // ==================================================
+
+  const resolvedModel =
+    typeof model === "string" &&
+    model.trim().length > 0
+      ? model.trim()
+      : FALLBACK_MODEL_PATH;
+
+
+  // ==================================================
+  // RENDER
+  // ==================================================
 
   return (
+
     <View style={styles.container}>
 
       <Canvas
@@ -237,7 +373,7 @@ export default function Companion3DViewer() {
 
         {/* ==========================================
             LIGHTING
-            ========================================== */}
+        ========================================== */}
 
         <ambientLight
           intensity={1.5}
@@ -245,39 +381,64 @@ export default function Companion3DViewer() {
 
 
         <directionalLight
-          position={[5, 5, 5]}
+          position={[
+            5,
+            5,
+            5,
+          ]}
           intensity={2}
         />
 
 
         <directionalLight
-          position={[-5, 3, 2]}
+          position={[
+            -5,
+            3,
+            2,
+          ]}
           intensity={1}
         />
 
 
         {/* ==========================================
-            DRAGON
-            ========================================== */}
+            COMPANION
+        ========================================== */}
 
         <Suspense fallback={null}>
 
-          <GLBModel />
+          <GLBModel
+            model={resolvedModel}
+            animationSpeed={animationSpeed}
+            scale={scale}
+            position={position}
+            rotation={rotation}
+          />
 
         </Suspense>
 
       </Canvas>
 
     </View>
+
   );
 }
 
 
 // ====================================================
-// PRELOAD MODEL
+// PRELOAD FALLBACK MODEL
+// ====================================================
+//
+// Only preload the known local model.
+//
+// Database/Supabase models cannot be preloaded here
+// because their URLs are determined dynamically
+// based on which Companion the player selected.
+//
 // ====================================================
 
-useGLTF.preload(MODEL_PATH);
+useGLTF.preload(
+  FALLBACK_MODEL_PATH
+);
 
 
 // ====================================================
@@ -297,6 +458,7 @@ const styles = StyleSheet.create({
     position: "relative",
 
     backgroundColor: "transparent",
+
   },
 
 });
