@@ -381,6 +381,37 @@ type CompanionCatalogRow = {
 const COMPANION_COLLECTION_RADIUS_METERS = 15;
 const COMPANION_MIN_SPAWN_METERS = 180;
 const COMPANION_MAX_SPAWN_METERS = 320;
+const BROWSER_SCAN_ACCURACY_TARGET_METERS = 75;
+// Never place YOU ARE HERE from a city-level/IP-style browser fix.
+// If Chrome cannot get within this radius, keep the existing map position and
+// tell the player that the browser location is too coarse instead of lying.
+const BROWSER_MAX_ACCEPTED_ACCURACY_METERS = 500;
+const BROWSER_SCAN_FIX_TIMEOUT_MS = 10_000;
+
+const DEMO_COMPANIONS: CompanionCatalogRow[] = [
+  {
+    id: "local-demo-companion-1",
+    companion_key: "companion-1",
+    name: "Companion 1",
+    description: "Nearby Companion",
+    rarity: "Unknown",
+    model_path: null,
+    thumbnail_path: null,
+    base_health: 100,
+    base_energy: 100,
+  },
+  {
+    id: "local-demo-companion-2",
+    companion_key: "companion-2",
+    name: "Companion 2",
+    description: "Nearby Companion",
+    rarity: "Unknown",
+    model_path: null,
+    thumbnail_path: null,
+    base_health: 100,
+    base_energy: 100,
+  },
+];
 
 function createNearbyCompanionDestination(origin: Coordinate): Coordinate {
   const distanceMeters =
@@ -397,6 +428,99 @@ function createNearbyCompanionDestination(origin: Coordinate): Coordinate {
     latitude: origin.latitude + latitudeOffset,
     longitude: origin.longitude + longitudeOffset,
   };
+}
+
+const ORS_PROXY_FUNCTION = "companion-routing";
+
+
+type ORSWalkingRouteResult = {
+  coordinates: Coordinate[];
+  distanceMeters: number | null;
+  duration: number | null;
+};
+
+type CompanionRoutingResponse = {
+  coordinate?: Coordinate;
+  formattedAddress?: string;
+  coordinates?: Coordinate[];
+  distanceMeters?: number | null;
+  duration?: number | null;
+  error?: string;
+};
+
+async function callCompanionRoutingProxy(
+  body: Record<string, unknown>,
+): Promise<CompanionRoutingResponse> {
+  const { data, error } = await supabase.functions.invoke(ORS_PROXY_FUNCTION, {
+    body,
+  });
+
+  if (error) {
+    throw new Error(
+      `Mission Trail routing service failed: ${error.message ?? "Unknown Edge Function error."}`,
+    );
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new Error("Mission Trail routing service returned an invalid response.");
+  }
+
+  const result = data as CompanionRoutingResponse;
+
+  if (result.error) {
+    throw new Error(result.error);
+  }
+
+  return result;
+}
+
+async function getORSWalkingRoute(
+  origin: Coordinate,
+  destination: Coordinate,
+): Promise<ORSWalkingRouteResult> {
+  try {
+    const data = await callCompanionRoutingProxy({ action: "route", origin, destination });
+    const coordinates = Array.isArray(data.coordinates)
+      ? data.coordinates.filter((point): point is Coordinate => !!point && Number.isFinite(Number(point.latitude)) && Number.isFinite(Number(point.longitude)))
+      : [];
+    if (coordinates.length >= 2) {
+      return {
+        coordinates: coordinates.map((point) => ({ latitude: Number(point.latitude), longitude: Number(point.longitude) })),
+        distanceMeters: typeof data.distanceMeters === "number" ? data.distanceMeters : null,
+        duration: typeof data.duration === "number" ? data.duration : null,
+      };
+    }
+  } catch (error) {
+    if (__DEV__) console.warn("Walking-route service unavailable; using demo route geometry:", error);
+  }
+  return { coordinates: [origin, destination], distanceMeters: calculateDistanceMeters(origin, destination), duration: null };
+}
+
+async function createRoutableCompanionDestination(
+  origin: Coordinate,
+): Promise<{ destination: Coordinate; route: Coordinate[] }> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = createNearbyCompanionDestination(origin);
+
+    try {
+      const walkingRoute = await getORSWalkingRoute(origin, candidate);
+      const destination =
+        walkingRoute.coordinates[walkingRoute.coordinates.length - 1] ?? candidate;
+
+      const straightLineDistance = calculateDistanceMeters(origin, destination);
+      if (straightLineDistance < 100) continue;
+
+      return { destination, route: walkingRoute.coordinates };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Mission Trail could not find a nearby walkable Companion location.");
 }
 
 // =======================+
@@ -454,7 +578,14 @@ export default function HomeScreen() {
     useState<Coordinate | null>(null);
   const [selectedCompanion, setSelectedCompanion] =
     useState<CompanionCatalogRow | null>(null);
+  const [selectedCompanions, setSelectedCompanions] = useState<CompanionCatalogRow[]>([]);
+  const [companionDestinations, setCompanionDestinations] = useState<Coordinate[]>([]);
+  const [activeCompanionIndex, setActiveCompanionIndex] = useState(0);
   const companionCollectingRef = useRef(false);
+
+  // Browser location used only for the web map/Companion marker.
+  // Secure relic GPS history still uses only accepted GPS samples.
+  const [browserWebCoordinate, setBrowserWebCoordinate] = useState<Coordinate | null>(null);
 
   const [collectedRelicIds, setCollectedRelicIds] = useState<string[]>([]);
   const [isProgressLoaded, setIsProgressLoaded] = useState(false);
@@ -922,9 +1053,8 @@ export default function HomeScreen() {
         // Do not trigger the browser prompt just by loading Home.
         // SCAN FOR COMPANION is the user action that requests permission.
         if (browserPermission !== "granted") {
-          setLocationError(
-            "Location permission is needed. Tap SCAN FOR COMPANION to allow location access.",
-          );
+          // Web demo uses the address-entry flow, so browser GPS is optional.
+          setLocationError(null);
           return;
         }
 
@@ -933,17 +1063,30 @@ export default function HomeScreen() {
 
           if (!isMounted) return;
 
-          setLocationError(null);
-          saveGoodGpsPoint(firstLocation);
+          const firstAccuracy =
+            firstLocation.coords.accuracy ?? Number.POSITIVE_INFINITY;
+
+          if (firstAccuracy <= BROWSER_MAX_ACCEPTED_ACCURACY_METERS) {
+            const firstCoordinate = makeMapCoordinate(firstLocation);
+            setBrowserWebCoordinate(firstCoordinate);
+            setLocationError(null);
+            if (isUsableGpsLocation(firstLocation)) {
+              saveGoodGpsPoint(firstLocation);
+            }
+          } else {
+            setLocationError(
+              `Browser location is too approximate (${Math.round(firstAccuracy)} m). Waiting for a better fix…`,
+            );
+          }
         } catch (error) {
           if (__DEV__) {
             console.warn("Initial browser location was not ready yet:", error);
           }
 
           if (isMounted) {
-            setLocationError(
-              "Finding your location… Make sure browser location access is enabled.",
-            );
+            // Manual address entry remains available on web even when browser
+            // geolocation is coarse, unavailable, or slow.
+            setLocationError(null);
           }
         }
 
@@ -952,9 +1095,12 @@ export default function HomeScreen() {
         locationWatcher = watchBrowserLocation((newLocation) => {
           if (!isMounted) return;
 
-          if (!isUsableGpsLocation(newLocation)) {
+          const browserAccuracy =
+            newLocation.coords.accuracy ?? Number.POSITIVE_INFINITY;
+
+          if (browserAccuracy > BROWSER_MAX_ACCEPTED_ACCURACY_METERS) {
             setLocationError(
-              "Improving browser location accuracy…",
+              `Browser location is too approximate (${Math.round(browserAccuracy)} m). Waiting for a better fix…`,
             );
             return;
           }
@@ -963,8 +1109,14 @@ export default function HomeScreen() {
           setIsMovingTooFast(tooFast);
 
           if (!tooFast) {
+            const liveCoordinate = makeMapCoordinate(newLocation);
+            setBrowserWebCoordinate(liveCoordinate);
             setLocationError(null);
-            saveGoodGpsPoint(newLocation);
+
+            // Secure relic GPS history keeps its stricter 25 m filter.
+            if (isUsableGpsLocation(newLocation)) {
+              saveGoodGpsPoint(newLocation);
+            }
           }
         });
 
@@ -1102,15 +1254,22 @@ export default function HomeScreen() {
 
   // Purpose: Implements the center map on user operation.
   function centerMapOnUser() {
-    if (!latestGpsPoint) {
+    if (Platform.OS === "web" && browserWebCoordinate) {
+      mapRef.current?.animateToRegion(
+        {
+          latitude: browserWebCoordinate.latitude,
+          longitude: browserWebCoordinate.longitude,
+          latitudeDelta: 0.008,
+          longitudeDelta: 0.008,
+        },
+        500,
+      );
       return;
     }
 
-    mapRef.current?.animateToRegion(
-      makeMapRegion(latestGpsPoint),
+    if (!latestGpsPoint) return;
 
-      500,
-    );
+    mapRef.current?.animateToRegion(makeMapRegion(latestGpsPoint), 500);
   }
 
   // =====================
@@ -1244,125 +1403,255 @@ export default function HomeScreen() {
   // LIVE COMPANION SEARCH
   // =====================
 
+  const runCompanionSearchAtCoordinate = useCallback(
+    async (scanOrigin: Coordinate) => {
+      if (!session?.user.id) {
+        Alert.alert("SIGN IN REQUIRED", "Sign in before searching for a Companion.");
+        return;
+      }
+
+      try {
+        const scanRegion: Region = {
+          latitude: scanOrigin.latitude,
+          longitude: scanOrigin.longitude,
+          latitudeDelta: 0.008,
+          longitudeDelta: 0.008,
+        };
+
+        hasCenteredOnGpsRef.current = true;
+        setMapRegion(scanRegion);
+        mapRef.current?.animateToRegion(scanRegion, 350);
+        setLocationError(null);
+
+        let companionsForToday: CompanionCatalogRow[] = [];
+
+        try {
+          const { data: catalogData, error: catalogError } = await supabase
+            .from("companions")
+            .select(
+              "id, companion_key, name, description, rarity, model_path, thumbnail_path, base_health, base_energy",
+            );
+
+          if (catalogError) throw catalogError;
+
+          const catalog = (catalogData ?? []) as CompanionCatalogRow[];
+          const { data: ownedData, error: ownedError } = await supabase
+            .from("user_companions")
+            .select("companion_id")
+            .eq("user_id", session.user.id);
+
+          if (ownedError) throw ownedError;
+
+          const ownedIds = new Set(
+            (ownedData ?? []).map((row) => row.companion_id),
+          );
+          const availableCompanions = catalog.filter(
+            (companion) => !ownedIds.has(companion.id),
+          );
+
+          companionsForToday = [...availableCompanions]
+            .sort(() => Math.random() - 0.5)
+            .slice(0, 2);
+        } catch (catalogError) {
+          console.warn(
+            "Companion catalog unavailable; using local Companion 1/2 markers:",
+            catalogError,
+          );
+        }
+
+        for (const demoCompanion of DEMO_COMPANIONS) {
+          if (companionsForToday.length >= 2) break;
+          companionsForToday.push(demoCompanion);
+        }
+        companionsForToday = companionsForToday.slice(0, 2);
+
+        // Each Companion is placed at the end of a real openrouteservice walking route.
+        // This avoids drawing a straight point-to-point line and also keeps the
+        // destination tied to routable pedestrian geometry whenever openrouteservice can
+        // find a route.
+        const routedDestinations = [];
+        for (let index = 0; index < companionsForToday.length; index += 1) {
+          routedDestinations.push(
+            await createRoutableCompanionDestination(scanOrigin),
+          );
+        }
+
+        const destinations = routedDestinations.map((item) => item.destination);
+        const firstDestination = destinations[0];
+        const firstRoute = routedDestinations[0]?.route ?? [];
+
+        if (!firstDestination || firstRoute.length < 2) {
+          throw new Error("Mission Trail could not create a walking Companion route.");
+        }
+
+        companionCollectingRef.current = false;
+        setSelectedCompanions(companionsForToday);
+        setSelectedCompanion(companionsForToday[0]);
+        setCompanionDestinations(destinations);
+        setActiveCompanionIndex(0);
+        setCompanionDemoRoute(firstRoute);
+        setCompanionWalkerCoordinate(scanOrigin);
+        setCompanionSearchState("traveling");
+
+        mapRef.current?.fitToCoordinates?.(firstRoute, {
+          edgePadding: { top: 180, right: 80, bottom: 150, left: 80 },
+          animated: true,
+        });
+      } catch (error) {
+        console.error("Could not start Companion search:", error);
+        setCompanionSearchState("idle");
+        const message =
+          error instanceof Error ? error.message : "Companion search failed.";
+        setLocationError(message);
+        Alert.alert("COMPANION SEARCH FAILED", message);
+      }
+    },
+    [session?.user.id],
+  );
+
   const startCompanionSearch = useCallback(async () => {
     if (!session?.user.id) {
       Alert.alert("SIGN IN REQUIRED", "Sign in before searching for a Companion.");
       return;
     }
 
-    let scanOrigin = playerCoordinate;
+    // Web: use the browser's real current location. No address-entry popup.
+    if (Platform.OS === "web") {
+      try {
+        if (typeof navigator === "undefined" || !navigator.geolocation) {
+          throw new Error("This browser does not support location services.");
+        }
+
+        const freshLocation = await getBestBrowserCurrentLocation();
+        const browserAccuracy =
+          freshLocation.coords.accuracy ?? Number.POSITIVE_INFINITY;
+
+        if (browserAccuracy > BROWSER_MAX_ACCEPTED_ACCURACY_METERS) {
+          throw new Error(
+            `Chrome only found an approximate location (about ${Math.round(browserAccuracy)} meters accuracy). Mission Trail will not place YOU ARE HERE at a guessed city-level location. Check Windows Location Services/Wi-Fi and scan again.`,
+          );
+        }
+
+        const coordinate = makeMapCoordinate(freshLocation);
+        const gpsRegion: Region = {
+          latitude: coordinate.latitude,
+          longitude: coordinate.longitude,
+          latitudeDelta: 0.008,
+          longitudeDelta: 0.008,
+        };
+
+        setBrowserWebCoordinate(coordinate);
+        setCompanionWalkerCoordinate(coordinate);
+        setMapRegion(gpsRegion);
+        hasCenteredOnGpsRef.current = true;
+        setLocationError(null);
+        mapRef.current?.animateToRegion(gpsRegion, 350);
+        if (isUsableGpsLocation(freshLocation)) {
+          saveGoodGpsPoint(freshLocation);
+        }
+        await runCompanionSearchAtCoordinate(coordinate);
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : "Mission Trail could not get your current browser location.";
+        console.error("Could not get browser location:", error);
+        setLocationError(message);
+        Alert.alert("LOCATION REQUIRED", message);
+      }
+      return;
+    }
 
     try {
-      const canUseLocation =
-        Platform.OS === "web"
-          ? await askForBrowserLocationPermission()
-          : await askForLocationPermission();
-
+      const canUseLocation = await askForLocationPermission();
       if (!canUseLocation) {
         setLocationError(
           "Location permission is required to place and track a Companion.",
         );
         Alert.alert(
           "LOCATION REQUIRED",
-          "Allow Mission Trail to use your location so the map can show you and guide you to a Companion.",
+          "Allow Mission Trail to use your location so the map can guide you to a Companion.",
         );
         return;
       }
 
-      if (!scanOrigin) {
-        const firstLocation =
-          Platform.OS === "web"
-            ? await getBrowserCurrentLocation()
-            : await getFirstLocation();
-
-        if (!isUsableGpsLocation(firstLocation)) {
-          throw new Error("Mission Trail could not get an accurate GPS fix yet.");
+      let freshLocation: Location.LocationObject | null = null;
+      try {
+        freshLocation = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.BestForNavigation,
+        });
+      } catch (freshLocationError) {
+        if (__DEV__) {
+          console.warn(
+            "Fresh device GPS was unavailable; using latest accepted location if possible:",
+            freshLocationError,
+          );
         }
-
-        saveGoodGpsPoint(firstLocation);
-        scanOrigin = makeMapCoordinate(firstLocation);
+        if (latestGpsPoint && isUsableGpsLocation(latestGpsPoint)) {
+          freshLocation = latestGpsPoint;
+        }
       }
 
-      setLocationError(null);
+      if (!freshLocation) {
+        throw new Error(
+          "No usable current GPS location is available yet. Move to an open area and try again.",
+        );
+      }
+
+      saveGoodGpsPoint(freshLocation);
       setTrackingRestartKey((current) => current + 1);
-
-      const { data: catalogData, error: catalogError } = await supabase
-        .from("companions")
-        .select(
-          "id, companion_key, name, description, rarity, model_path, thumbnail_path, base_health, base_energy",
-        );
-
-      if (catalogError) throw catalogError;
-
-      const catalog = (catalogData ?? []) as CompanionCatalogRow[];
-
-      const { data: ownedData, error: ownedError } = await supabase
-        .from("user_companions")
-        .select("companion_id")
-        .eq("user_id", session.user.id);
-
-      if (ownedError) throw ownedError;
-
-      const ownedIds = new Set((ownedData ?? []).map((row) => row.companion_id));
-      const availableCompanions = catalog.filter(
-        (companion) => !ownedIds.has(companion.id),
-      );
-
-      if (availableCompanions.length === 0) {
-        Alert.alert(
-          "COLLECTION COMPLETE",
-          "You already own every Companion currently available.",
-        );
-        return;
-      }
-
-      const companion =
-        availableCompanions[Math.floor(Math.random() * availableCompanions.length)];
-      const destination = createNearbyCompanionDestination(scanOrigin);
-      const route = [scanOrigin, destination];
-
-      companionCollectingRef.current = false;
-      setSelectedCompanion(companion);
-      setCompanionDemoRoute(route);
-      setCompanionWalkerCoordinate(scanOrigin);
-      setCompanionSearchState("traveling");
-
-      mapRef.current?.fitToCoordinates?.(route, {
-        edgePadding: { top: 180, right: 80, bottom: 150, left: 80 },
-        animated: true,
-      });
+      await runCompanionSearchAtCoordinate(makeMapCoordinate(freshLocation));
     } catch (error) {
       console.error("Could not start Companion search:", error);
+      const message =
+        error instanceof Error ? error.message : "Companion search failed.";
       setCompanionSearchState("idle");
-      Alert.alert(
-        "COMPANION SEARCH FAILED",
-        "Mission Trail could not start the Companion hunt. Check location access and try again.",
-      );
+      setLocationError(message);
+      Alert.alert("COMPANION SEARCH FAILED", message);
     }
-  }, [playerCoordinate, saveGoodGpsPoint, session?.user.id]);
+  }, [
+    latestGpsPoint,
+    runCompanionSearchAtCoordinate,
+    saveGoodGpsPoint,
+    session?.user.id,
+  ]);
 
-  // The Explorer icon is driven by the same accepted GPS position used elsewhere
-  // on the Home screen. It never advances on a timer.
-  useEffect(() => {
-    if (companionSearchState !== "traveling" || !playerCoordinate) return;
-    setCompanionWalkerCoordinate(playerCoordinate);
-  }, [companionSearchState, playerCoordinate]);
+  const companionTrackingCoordinate = useMemo(
+    () =>
+      Platform.OS === "web" && browserWebCoordinate
+        ? browserWebCoordinate
+        : latestGpsPoint
+          ? makeMapCoordinate(latestGpsPoint)
+          : null,
+    [browserWebCoordinate, latestGpsPoint],
+  );
 
-  // Collect only when real GPS enters the Companion encounter radius.
+  // The Companion tracker follows real GPS on mobile and browser geolocation on web.
   useEffect(() => {
+    if (companionSearchState !== "traveling" || !companionTrackingCoordinate) return;
+    setCompanionWalkerCoordinate(companionTrackingCoordinate);
+  }, [companionSearchState, companionTrackingCoordinate]);
+
+  // Collect only when real GPS enters the active Companion encounter radius.
+  useEffect(() => {
+    const activeCompanion = selectedCompanions[activeCompanionIndex];
+    const activeDestination = companionDestinations[activeCompanionIndex];
+    const liveCoordinate = companionTrackingCoordinate;
+
     if (
       companionSearchState !== "traveling" ||
-      !playerCoordinate ||
-      !selectedCompanion ||
-      companionDemoRoute.length < 2 ||
+      !liveCoordinate ||
+      !activeCompanion ||
+      !activeDestination ||
       !session?.user.id ||
       companionCollectingRef.current
     ) {
       return;
     }
 
-    const destination = companionDemoRoute[companionDemoRoute.length - 1];
-    const distanceMeters = calculateDistanceMeters(playerCoordinate, destination);
+    const distanceMeters = calculateDistanceMeters(
+      liveCoordinate,
+      activeDestination,
+    );
 
     if (distanceMeters > COMPANION_COLLECTION_RADIUS_METERS) return;
     if (isMovingTooFast) return;
@@ -1370,27 +1659,26 @@ export default function HomeScreen() {
     companionCollectingRef.current = true;
 
     void (async () => {
-      const { error: collectError } = await supabase
-        .from("user_companions")
-        .insert({
-          user_id: session.user.id,
-          companion_id: selectedCompanion.id,
-          level: 1,
-          xp: 0,
-          bond: 0,
-          energy: selectedCompanion.base_energy ?? 100,
-          hunger: 100,
-          happiness: 100,
-          health: selectedCompanion.base_health ?? 100,
-        });
+      const isLocalDemoCompanion = activeCompanion.id.startsWith(
+        "local-demo-companion-",
+      );
 
-      if (collectError) {
-        if (collectError.code === "23505") {
-          Alert.alert(
-            "ALREADY COLLECTED",
-            `${selectedCompanion.name} is already in your Companion collection.`,
-          );
-        } else {
+      if (!isLocalDemoCompanion) {
+        const { error: collectError } = await supabase
+          .from("user_companions")
+          .insert({
+            user_id: session.user.id,
+            companion_id: activeCompanion.id,
+            level: 1,
+            xp: 0,
+            bond: 0,
+            energy: activeCompanion.base_energy ?? 100,
+            hunger: 100,
+            happiness: 100,
+            health: activeCompanion.base_health ?? 100,
+          });
+
+        if (collectError && collectError.code !== "23505") {
           console.error("Could not save Companion collection:", collectError);
           Alert.alert(
             "SAVE FAILED",
@@ -1401,19 +1689,91 @@ export default function HomeScreen() {
         }
       }
 
-      setCompanionWalkerCoordinate(destination);
+      const nextIndex = activeCompanionIndex + 1;
+
+      if (nextIndex < selectedCompanions.length) {
+        const nextDestination = companionDestinations[nextIndex];
+
+        const continueToNextCompanion = async () => {
+          const currentCoordinate =
+            companionTrackingCoordinate ?? activeDestination;
+
+          try {
+            const nextWalkingRoute = await getORSWalkingRoute(
+              currentCoordinate,
+              nextDestination,
+            );
+
+            setActiveCompanionIndex(nextIndex);
+            setSelectedCompanion(selectedCompanions[nextIndex]);
+            setCompanionDemoRoute(nextWalkingRoute.coordinates);
+            setCompanionWalkerCoordinate(currentCoordinate);
+            companionCollectingRef.current = false;
+            setCompanionSearchState("traveling");
+
+            mapRef.current?.fitToCoordinates?.(nextWalkingRoute.coordinates, {
+              edgePadding: { top: 180, right: 80, bottom: 150, left: 80 },
+              animated: true,
+            });
+          } catch (error) {
+            console.error("Could not route to Companion 2:", error);
+            companionCollectingRef.current = false;
+            Alert.alert(
+              "ROUTE UNAVAILABLE",
+              error instanceof Error
+                ? error.message
+                : "Mission Trail could not calculate the walking route.",
+            );
+          }
+        };
+
+        // Native Alert gives the player the requested continue/stop choice.
+        // Web Alert support varies, so continue automatically there.
+        if (Platform.OS === "web") {
+          void continueToNextCompanion();
+        } else {
+          Alert.alert(
+            "COMPANION 1 FOUND",
+            `${activeCompanion.name} was added to your collection. Continue to Companion 2?`,
+            [
+              {
+                text: "No",
+                style: "cancel",
+                onPress: () => {
+                  setCompanionWalkerCoordinate(activeDestination);
+                  setCompanionSearchState("found");
+                  companionCollectingRef.current = false;
+                },
+              },
+              {
+                text: "Yes",
+                onPress: () => {
+                  void continueToNextCompanion();
+                },
+              },
+            ],
+          );
+        }
+
+        return;
+      }
+
+      setCompanionWalkerCoordinate(activeDestination);
       setCompanionSearchState("found");
+      companionCollectingRef.current = false;
       Alert.alert(
         "COMPANION FOUND",
-        `${selectedCompanion.name} has been added to your Companion collection.`,
+        `${activeCompanion.name} has been added to your Companion collection.`,
       );
     })();
   }, [
-    companionDemoRoute,
+    activeCompanionIndex,
+    companionDestinations,
     companionSearchState,
+    companionTrackingCoordinate,
     isMovingTooFast,
-    playerCoordinate,
-    selectedCompanion,
+    latestGpsPoint,
+    selectedCompanions,
     session?.user.id,
   ]);
 
@@ -1431,7 +1791,7 @@ export default function HomeScreen() {
 
       <MapView
         ref={mapRef}
-        style={StyleSheet.absoluteFill}
+        style={[StyleSheet.absoluteFill, styles.mapLayer]}
         provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
         customMapStyle={Platform.OS !== "web" ? darkMapStyle : undefined}
         mapType="standard"
@@ -1495,44 +1855,59 @@ export default function HomeScreen() {
               secureRelicField.huntStage,
             )}
 
-        {companionDemoRoute.length > 1 ? (
+        {companionSearchState !== "idle" &&
+        companionDestinations.length > 0 ? (
           <>
-            <Polyline
-              coordinates={companionDemoRoute}
-              strokeColor="#00B2FF"
-              strokeWidth={6}
-            />
-            <Marker
-              coordinate={companionDemoRoute[companionDemoRoute.length - 1]}
-              title={selectedCompanion?.name ?? "Companion"}
-              description={
-                selectedCompanion?.rarity
-                  ? `${selectedCompanion.rarity} Companion`
-                  : "Companion destination"
-              }
-              pinColor="#FF2DF7"
-              zIndex={20}
-              anchor={{ x: 0.5, y: 0.5 }}
-            >
-              <View style={styles.companionDestinationMarker}>
-                <Ionicons name="paw" size={22} color="#FFFFFF" />
-                <Text style={styles.companionDestinationLabel}>
-                  {(selectedCompanion?.name ?? "COMPANION").toUpperCase()}
-                </Text>
-              </View>
-            </Marker>
+            {companionDemoRoute.length > 1 ? (
+              <Polyline
+                coordinates={companionDemoRoute}
+                strokeColor="#FF01E2"
+                strokeWidth={6}
+              />
+            ) : null}
+
+            {companionDestinations.map((destination, index) => (
+              <Marker
+                key={`companion-destination-${index}`}
+                coordinate={destination}
+                title={`Companion ${index + 1}`}
+                description={
+                  selectedCompanions[index]?.rarity
+                    ? `${selectedCompanions[index].rarity} Companion`
+                    : `Companion ${index + 1} destination`
+                }
+                pinColor="#FF01E2"
+                zIndex={index === activeCompanionIndex ? 22 : 20}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View
+                  style={[
+                    styles.companionDestinationMarker,
+                    index !== activeCompanionIndex &&
+                      styles.companionDestinationMarkerInactive,
+                  ]}
+                >
+                  <Ionicons name="paw" size={22} color="#FFFFFF" />
+                  <Text style={styles.companionDestinationLabel}>
+                    {`COMPANION ${index + 1}`}
+                  </Text>
+                </View>
+              </Marker>
+            ))}
           </>
         ) : null}
 
-        {companionWalkerCoordinate ? (
+        {companionTrackingCoordinate ? (
           <Marker
-            coordinate={companionWalkerCoordinate}
-            title="Explorer"
+            coordinate={companionTrackingCoordinate}
+            title="You Are Here"
+            description="Your current device location"
             zIndex={25}
             anchor={{ x: 0.5, y: 0.5 }}
           >
             <View style={styles.companionWalkerMarker}>
-              <Ionicons name="walk" size={22} color="#FFFFFF" />
+              <Ionicons name="navigate" size={21} color="#FFFFFF" />
+              <Text style={styles.youAreHereLabel}>YOU ARE HERE</Text>
             </View>
           </Marker>
         ) : null}
@@ -1709,6 +2084,7 @@ export default function HomeScreen() {
         </View>
       </View>
 
+
       <RelicAwakening
         relic={awakeningRelic}
         totalXp={totalXp}
@@ -1798,8 +2174,72 @@ function getBrowserCurrentLocation(): Promise<Location.LocationObject> {
       (error) => reject(error),
       {
         enableHighAccuracy: true,
-        timeout: 15_000,
-        maximumAge: 10_000,
+        timeout: 30_000,
+        maximumAge: 0,
+      },
+    );
+  });
+}
+
+function getBestBrowserCurrentLocation(): Promise<Location.LocationObject> {
+  return new Promise((resolve, reject) => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      reject(new Error("Browser geolocation is unavailable."));
+      return;
+    }
+
+    let bestLocation: Location.LocationObject | null = null;
+    let settled = false;
+    let watchId: number | null = null;
+
+    const finish = (location: Location.LocationObject) => {
+      if (settled) return;
+      settled = true;
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      window.clearTimeout(timeoutId);
+      resolve(location);
+    };
+
+    const timeoutId = window.setTimeout(() => {
+      if (bestLocation) {
+        finish(bestLocation);
+      } else {
+        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+        settled = true;
+        reject(new Error("Timed out while waiting for browser location."));
+      }
+    }, BROWSER_SCAN_FIX_TIMEOUT_MS);
+
+    watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        const location = browserPositionToExpoLocation(position);
+        const accuracy = location.coords.accuracy ?? Number.POSITIVE_INFINITY;
+        const bestAccuracy =
+          bestLocation?.coords.accuracy ?? Number.POSITIVE_INFINITY;
+
+        if (!bestLocation || accuracy < bestAccuracy) {
+          bestLocation = location;
+        }
+
+        if (accuracy <= BROWSER_SCAN_ACCURACY_TARGET_METERS) {
+          finish(location);
+        }
+      },
+      (error) => {
+        if (settled) return;
+
+        // Permission denial cannot improve by waiting for more samples.
+        if (error.code === error.PERMISSION_DENIED) {
+          window.clearTimeout(timeoutId);
+          if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+          settled = true;
+          reject(error);
+        }
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: BROWSER_SCAN_FIX_TIMEOUT_MS,
+        maximumAge: 0,
       },
     );
   });
@@ -1839,8 +2279,8 @@ function watchBrowserLocation(
     },
     {
       enableHighAccuracy: true,
-      timeout: 15_000,
-      maximumAge: 2_500,
+      timeout: 30_000,
+      maximumAge: 0,
     },
   );
 
@@ -3691,12 +4131,148 @@ function renderBottomTabBar(
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-
+    position: "relative",
     backgroundColor: "#0a0a1a",
+  },
+
+  // Keep the real MapLibre/native map as the bottom layer. The HUD, side
+  // controls and navigation are siblings rendered after it and must remain
+  // above the web iframe.
+  mapLayer: {
+    zIndex: 0,
+    elevation: 0,
+  },
+
+  locationEntryBackdrop: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(3, 2, 18, 0.78)",
+    paddingHorizontal: 18,
+  },
+
+  locationEntryCard: {
+    width: "100%",
+    maxWidth: 620,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255, 1, 226, 0.78)",
+    backgroundColor: "rgba(9, 5, 29, 0.99)",
+    padding: 18,
+    shadowColor: "#FF01E2",
+    shadowOpacity: 0.45,
+    shadowRadius: 20,
+    elevation: 18,
+  },
+
+  locationEntryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 16,
+  },
+
+  locationEntryIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#7C3AED",
+    borderWidth: 1,
+    borderColor: "#FF63F7",
+  },
+
+  locationEntryHeaderCopy: { flex: 1 },
+  locationEntryTitle: {
+    color: "#FFFFFF",
+    fontSize: 17,
+    fontWeight: "900",
+    letterSpacing: 0.6,
+  },
+  locationEntrySubtitle: {
+    color: "#C4B5FD",
+    fontSize: 11,
+    marginTop: 3,
+  },
+  locationEntryLabel: {
+    color: "#E9D5FF",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.7,
+    marginBottom: 5,
+  },
+  locationEntryInput: {
+    minHeight: 44,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(168, 85, 247, 0.72)",
+    backgroundColor: "rgba(20, 10, 34, 0.98)",
+    color: "#FFFFFF",
+    fontSize: 14,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  locationEntryRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  locationEntryCityColumn: { flex: 2, minWidth: 180 },
+  locationEntryStateColumn: { flex: 1, minWidth: 90 },
+  locationEntryZipColumn: { flex: 1, minWidth: 110 },
+  locationEntryPrivacy: {
+    color: "#9F93B3",
+    fontSize: 9,
+    lineHeight: 13,
+    marginTop: 1,
+  },
+  locationEntryActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 16,
+  },
+  locationEntryCancelButton: {
+    minHeight: 44,
+    minWidth: 100,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#6D5A7D",
+    backgroundColor: "#140A22",
+    paddingHorizontal: 16,
+  },
+  locationEntryCancelText: {
+    color: "#DDD6FE",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  locationEntrySubmitButton: {
+    minHeight: 44,
+    minWidth: 180,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    borderRadius: 10,
+    backgroundColor: "#7C3AED",
+    borderWidth: 1,
+    borderColor: "#FF63F7",
+    paddingHorizontal: 16,
+  },
+  locationEntrySubmitText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.4,
   },
 
   cosmicOverlay: {
     position: "absolute",
+    zIndex: 1,
     top: 0,
     right: 0,
     bottom: 0,
@@ -3707,6 +4283,7 @@ const styles = StyleSheet.create({
 
   huntEnergyOverlay: {
     position: "absolute",
+    zIndex: 2,
     top: 2,
     right: 2,
     bottom: 2,
@@ -3718,22 +4295,29 @@ const styles = StyleSheet.create({
   },
 
   fixedOverlay: {
-    position: "absolute",
+    // On web this MUST be fixed to the browser viewport.  The MapLibre map
+    // lives in an iframe and can otherwise create its own stacking/scrolling
+    // context, which is what caused the right controls and bottom tabs to
+    // disappear even though the React components were still mounted.
+    position: (Platform.OS === "web" ? "fixed" : "absolute") as any,
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
-
+    width: "100%",
+    height: "100%",
     paddingHorizontal: sidePadding,
+    zIndex: 2147483000,
+    elevation: 100,
   },
 
   topOverlay: {
     position: "absolute",
-
     left: sidePadding,
     right: sidePadding,
-
     gap: 9,
+    zIndex: 2147483100,
+    elevation: 120,
   },
 
 
@@ -3741,6 +4325,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 10,
+    zIndex: 135,
+    elevation: 135,
   },
 
   huntCardColumn: {
@@ -4002,18 +4588,23 @@ const styles = StyleSheet.create({
   },
 
   companionDestinationMarker: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 52,
+    height: 52,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 3,
-    borderColor: "#FFB4FA",
-    backgroundColor: "#A855F7",
-    shadowColor: "#FF2DF7",
+    borderColor: "#FFFFFF",
+    backgroundColor: "#FF01E2",
+    shadowColor: "#FF01E2",
     shadowOpacity: 0.95,
     shadowRadius: 16,
     elevation: 12,
+  },
+
+  companionDestinationMarkerInactive: {
+    opacity: 0.68,
+    transform: [{ scale: 0.9 }],
   },
 
   companionDestinationLabel: {
@@ -4034,25 +4625,43 @@ const styles = StyleSheet.create({
   },
 
   companionWalkerMarker: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "#DDD6FE",
-    backgroundColor: "#A78BFA",
-    shadowColor: "#A855F7",
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    backgroundColor: "#C084FC",
+    shadowColor: "#FF01E2",
     shadowOpacity: 0.95,
-    shadowRadius: 12,
+    shadowRadius: 14,
     elevation: 12,
+  },
+
+  youAreHereLabel: {
+    position: "absolute",
+    top: 46,
+    minWidth: 104,
+    textAlign: "center",
+    color: "#FFFFFF",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.45,
+    backgroundColor: "rgba(7, 4, 28, 0.92)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 1, 226, 0.75)",
+    borderRadius: 7,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
   },
 
   bottomOverlay: {
     position: "absolute",
-
     left: sidePadding,
     right: sidePadding,
+    zIndex: 2147483300,
+    elevation: 140,
   },
 
   meetupPreviewOverlay: {
@@ -4291,14 +4900,14 @@ const styles = StyleSheet.create({
 
   headerBar: {
     height: isSmallPhone ? 40 : 46,
-
     flexDirection: "row",
-
     alignItems: "center",
-
     justifyContent: "center",
-
     gap: 9,
+    zIndex: 130,
+    elevation: 130,
+    borderRadius: 12,
+    backgroundColor: "rgba(6, 4, 26, 0.90)",
   },
 
   leaderboardButton: {
@@ -4363,6 +4972,7 @@ const styles = StyleSheet.create({
 
   statsCard: {
     minHeight: isSmallPhone ? 58 : 64,
+    zIndex: 130,
 
     borderRadius: 14,
 
@@ -4550,12 +5160,11 @@ const styles = StyleSheet.create({
 
   floatingButtons: {
     position: "absolute",
-
     right: sidePadding,
-
     top: "40%",
-
     gap: 10,
+    zIndex: 2147483400,
+    elevation: 150,
   },
 
   relicCompass: {
@@ -4716,6 +5325,8 @@ const styles = StyleSheet.create({
     top: "62%",
     alignItems: "flex-end",
     gap: 10,
+    zIndex: 2147483400,
+    elevation: 150,
   },
 
   auraButton: {
@@ -4871,6 +5482,7 @@ const styles = StyleSheet.create({
 
   tabBar: {
     minHeight: tabBarHeight,
+    zIndex: 2147483500,
 
     maxHeight: tabBarHeight,
 
