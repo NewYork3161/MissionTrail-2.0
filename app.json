@@ -86,7 +86,9 @@
         }
       ],
       "expo-secure-store",
-      "expo-iap"
+      "expo-iap",
+      "expo-image",
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,

@@ -5,6 +5,7 @@ import {
   Image,
   Platform,
   StyleSheet,
+  Pressable,
   Text,
   View,
 } from "react-native";
@@ -827,8 +828,10 @@ function renderCompanionSystem({
                     void onSelectCompanion(index);
                   }}
                 >
-                  <View
-                    pointerEvents="none"
+                  <Pressable
+                    onPress={() => {
+                      void onSelectCompanion(index);
+                    }}
                     style={[
                       styles.companionDestinationMarker,
                       !active &&
@@ -848,7 +851,7 @@ function renderCompanionSystem({
                     >
                       {`COMPANION ${index + 1}`}
                     </Text>
-                  </View>
+                  </Pressable>
                 </Marker>
               );
             },

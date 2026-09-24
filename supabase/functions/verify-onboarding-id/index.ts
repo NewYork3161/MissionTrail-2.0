@@ -1,1386 +1,930 @@
-// ======================================================
-// VERIFY ONBOARDING ID
+// ============================================================
+// COMPANION ROUTING
 // Supabase Edge Function
-// PRE-ACCOUNT ID INFORMATION MATCHING
-// ======================================================
+// ============================================================
 //
 // PURPOSE:
 //
-// 1. Receive the FRONT image of a user's ID.
-// 2. Receive onboarding information entered by the user.
-// 3. Send the ID image + entered information to OpenAI.
-// 4. Ask AI to READ the visible ID information.
-// 5. Compare visible information against onboarding data.
-// 6. Return matched / mismatch / unable_to_verify to the app.
+// Receives:
+//   {
+//     action: "route",
+//     origin: {
+//       latitude: number,
+//       longitude: number
+//     },
+//     destination: {
+//       latitude: number,
+//       longitude: number
+//     }
+//   }
+//
+// Calls OpenRouteService using the foot-walking profile.
+//
+// Returns:
+//   {
+//     coordinates: [
+//       { latitude, longitude },
+//       ...
+//     ],
+//     distanceMeters: number | null,
+//     duration: number | null,
+//     instructions: [
+//       {
+//         instruction,
+//         name,
+//         distance,
+//         duration,
+//         type,
+//         way_points
+//       },
+//       ...
+//     ]
+//   }
 //
 // IMPORTANT:
 //
-// This function intentionally runs BEFORE account creation.
-// It does NOT require a signed-in Supabase user.
-// It does NOT write to user_onboarding because no user_id exists yet.
+// OpenRouteService GeoJSON uses:
+//   [longitude, latitude]
 //
-// This is INFORMATION MATCHING only.
-// It does NOT prove that:
-// - the ID is genuine,
-// - the ID was issued by a government,
-// - the ID has not been altered,
-// - the person submitting it is the person pictured.
+// React Native Maps uses:
+//   { latitude, longitude }
 //
-// ======================================================
+// This function converts between the two formats.
+//
+// ============================================================
 
-// ======================================================
-// TYPES
-// ======================================================
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
-interface IdentityFieldComparison {
-  enteredValue?: string | null;
-  idValue?: string | null;
-  matched: boolean | null;
-  confidence?: number | null;
-}
 
-interface VerificationComparisons {
-  firstName?: IdentityFieldComparison;
-  lastName?: IdentityFieldComparison;
-  birthday?: IdentityFieldComparison;
-  city?: IdentityFieldComparison;
-  state?: IdentityFieldComparison;
-  country?: IdentityFieldComparison;
-}
+// ============================================================
+// CONFIGURATION
+// ============================================================
 
-interface OpenAIIdentityResult {
-  documentReadable: boolean;
-  appearsToBeIdentityDocument: boolean;
+const ORS_API_URL =
+  "https://api.openrouteservice.org/v2/directions/foot-walking/geojson";
 
-  extracted: {
-    firstName: string | null;
-    lastName: string | null;
-    birthday: string | null;
-    city: string | null;
-    state: string | null;
-    country: string | null;
-  };
-
-  comparisons: VerificationComparisons;
-  informationMatched: boolean;
-  requiresManualReview: boolean;
-  explanation: string;
-}
-
-// ======================================================
-// CONSTANTS
-// ======================================================
-
-const OPENAI_MODEL = "gpt-4.1-mini";
-const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
-
-// ======================================================
-// CORS
-// ======================================================
-
-const corsHeaders = {
+const corsHeaders: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
+
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
+
   "Access-Control-Allow-Methods":
     "POST, OPTIONS",
 };
 
-// ======================================================
+
+// ============================================================
+// TYPES
+// ============================================================
+
+type Coordinate = {
+  latitude: number;
+  longitude: number;
+};
+
+
+type RouteRequest = {
+  action?: "route";
+
+  origin?: Coordinate;
+
+  destination?: Coordinate;
+};
+
+
+type ORSStep = {
+  distance?: number;
+
+  duration?: number;
+
+  instruction?: string;
+
+  name?: string;
+
+  type?: number;
+
+  way_points?: [number, number];
+};
+
+
+type ORSSegment = {
+  distance?: number;
+
+  duration?: number;
+
+  steps?: ORSStep[];
+};
+
+
+type ORSFeature = {
+  geometry?: {
+    type?: string;
+
+    coordinates?: number[][];
+  };
+
+  properties?: {
+    summary?: {
+      distance?: number;
+
+      duration?: number;
+    };
+
+    segments?: ORSSegment[];
+  };
+};
+
+
+type ORSGeoJsonResponse = {
+  type?: string;
+
+  features?: ORSFeature[];
+};
+
+
+// ============================================================
 // JSON RESPONSE
-// ======================================================
+// ============================================================
 
 function jsonResponse(
   body: unknown,
   status = 200,
-) {
+): Response {
+
   return new Response(
     JSON.stringify(body),
     {
       status,
+
       headers: {
         ...corsHeaders,
-        "Content-Type": "application/json",
+
+        "Content-Type":
+          "application/json",
       },
     },
   );
 }
 
-// ======================================================
-// VERIFICATION TICKET IDENTITY
-// ======================================================
 
-type VerificationTicketIdentity = {
-  firstName: string;
-  lastName: string;
-  birthday: string;
-};
+// ============================================================
+// COORDINATE VALIDATION
+// ============================================================
 
+function isCoordinate(
+  value: unknown,
+): value is Coordinate {
 
-// ======================================================
-// NORMALIZE TICKET IDENTITY
-// ======================================================
-
-// Purpose:
-// Normalizes identity text exactly like the signup
-// database trigger so a ticket can only be used with
-// the onboarding identity that earned it.
-function normalizeTicketIdentityValue(
-  value: string,
-): string {
-  return value
-    .trim()
-    .toLowerCase();
-}
+  if (
+    !value ||
+    typeof value !== "object"
+  ) {
+    return false;
+  }
 
 
-// ======================================================
-// RANDOM BYTES -> URL SAFE TOKEN
-// ======================================================
-
-// Purpose:
-// Converts cryptographically random bytes into a
-// URL-safe secret string that can be carried to Signup.
-function bytesToBase64Url(
-  bytes: Uint8Array,
-): string {
-
-  const binary =
-    String.fromCharCode(
-      ...bytes,
-    );
+  const coordinate =
+    value as Record<string, unknown>;
 
 
-  return btoa(binary)
-    .replace(
-      /\+/g,
-      "-",
-    )
-    .replace(
-      /\//g,
-      "_",
-    )
-    .replace(
-      /=+$/g,
-      "",
-    );
-}
+  const latitude =
+    coordinate.latitude;
 
 
-// ======================================================
-// SHA-256
-// ======================================================
-
-// Purpose:
-// Hashes the secret verification ticket before storage.
-// Only the hash is stored in Supabase.
-async function sha256Hex(
-  value: string,
-): Promise<string> {
-
-  const encoded =
-    new TextEncoder()
-      .encode(value);
-
-
-  const digest =
-    await crypto.subtle.digest(
-      "SHA-256",
-      encoded,
-    );
-
-
-  return Array.from(
-    new Uint8Array(
-      digest,
-    ),
-  )
-    .map(
-      (byte) =>
-        byte
-          .toString(16)
-          .padStart(
-            2,
-            "0",
-          ),
-    )
-    .join("");
-}
-
-
-// ======================================================
-// CREATE VERIFICATION TICKET
-// ======================================================
-
-// Purpose:
-// Generates a one-time 256-bit verification ticket,
-// stores only its SHA-256 hash in Supabase, and returns
-// the raw ticket once to the verified onboarding client.
-async function createVerificationTicket(
-  identity: VerificationTicketIdentity,
-): Promise<string> {
-
-  // Purpose:
-  // Reads trusted Supabase credentials that exist only
-  // inside the deployed Edge Function environment.
-  const supabaseUrl =
-    Deno.env.get(
-      "SUPABASE_URL",
-    );
-
-  const serviceRoleKey =
-    Deno.env.get(
-      "SUPABASE_SERVICE_ROLE_KEY",
-    );
+  const longitude =
+    coordinate.longitude;
 
 
   if (
-    !supabaseUrl ||
-    !serviceRoleKey
+    typeof latitude !== "number" ||
+    !Number.isFinite(latitude)
   ) {
-    throw new Error(
-      "Secure verification ticket service is not configured.",
-    );
+    return false;
   }
 
 
-  // Purpose:
-  // Creates 32 cryptographically random bytes.
-  // 32 bytes = 256 bits of ticket entropy.
-  const randomBytes =
-    new Uint8Array(32);
-
-  crypto.getRandomValues(
-    randomBytes,
-  );
-
-
-  const rawTicket =
-    bytesToBase64Url(
-      randomBytes,
-    );
-
-
-  const tokenHash =
-    await sha256Hex(
-      rawTicket,
-    );
-
-
-  // Purpose:
-  // Stores only the ticket hash and the identity that
-  // successfully passed the onboarding information match.
-  const insertResponse =
-    await fetch(
-      `${supabaseUrl}/rest/v1/onboarding_verification_tickets`,
-      {
-        method:
-          "POST",
-
-        headers: {
-          apikey:
-            serviceRoleKey,
-
-          Authorization:
-            `Bearer ${serviceRoleKey}`,
-
-          "Content-Type":
-            "application/json",
-
-          Prefer:
-            "return=minimal",
-        },
-
-        body:
-          JSON.stringify({
-            token_hash:
-              tokenHash,
-
-            first_name_norm:
-              normalizeTicketIdentityValue(
-                identity.firstName,
-              ),
-
-            last_name_norm:
-              normalizeTicketIdentityValue(
-                identity.lastName,
-              ),
-
-            birthday_norm:
-              normalizeTicketIdentityValue(
-                identity.birthday,
-              ),
-          }),
-      },
-    );
-
-
-  if (!insertResponse.ok) {
-
-    const databaseMessage =
-      await insertResponse.text();
-
-
-    console.error(
-      "Unable to store verification ticket:",
-      insertResponse.status,
-      databaseMessage,
-    );
-
-
-    throw new Error(
-      "Verification ticket could not be created.",
-    );
+  if (
+    typeof longitude !== "number" ||
+    !Number.isFinite(longitude)
+  ) {
+    return false;
   }
 
 
-  return rawTicket;
+  if (
+    latitude < -90 ||
+    latitude > 90
+  ) {
+    return false;
+  }
+
+
+  if (
+    longitude < -180 ||
+    longitude > 180
+  ) {
+    return false;
+  }
+
+
+  return true;
 }
 
 
-// ======================================================
-// CLEAN STRING
-// ======================================================
+// ============================================================
+// NORMALIZE OPENROUTESERVICE GEOMETRY
+// ============================================================
 
-function cleanString(
-  value: FormDataEntryValue | null,
-): string {
-  if (typeof value !== "string") {
-    return "";
+function normalizeRouteCoordinates(
+  rawCoordinates: unknown,
+): Coordinate[] {
+
+  if (
+    !Array.isArray(rawCoordinates)
+  ) {
+    return [];
   }
 
-  return value.trim();
-}
 
-// ======================================================
-// NORMALIZE DATE
-// ======================================================
-//
-// Converts common birthday formats to YYYY-MM-DD
-// when possible.
-//
-// ======================================================
+  const coordinates: Coordinate[] =
+    [];
 
-function normalizeDate(
-  value: string | null | undefined,
-): string {
-  if (!value) {
-    return "";
-  }
-
-  const cleaned = value.trim();
-
-  // Already YYYY-MM-DD
-  const isoMatch = cleaned.match(
-    /^(\d{4})-(\d{1,2})-(\d{1,2})$/,
-  );
-
-  if (isoMatch) {
-    const year = isoMatch[1];
-    const month = isoMatch[2].padStart(2, "0");
-    const day = isoMatch[3].padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
-  }
-
-  // MM/DD/YYYY
-  const usMatch = cleaned.match(
-    /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/,
-  );
-
-  if (usMatch) {
-    const month = usMatch[1].padStart(2, "0");
-    const day = usMatch[2].padStart(2, "0");
-    const year = usMatch[3];
-
-    return `${year}-${month}-${day}`;
-  }
-
-  return cleaned;
-}
-
-// ======================================================
-// FILE -> BASE64
-// ======================================================
-
-async function fileToBase64(
-  file: File,
-): Promise<string> {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-
-  let binary = "";
 
   for (
-    let i = 0;
-    i < bytes.length;
-    i += chunkSize
+    const rawCoordinate
+    of rawCoordinates
   ) {
-    const chunk = bytes.subarray(
-      i,
-      Math.min(
-        i + chunkSize,
-        bytes.length,
-      ),
-    );
 
-    binary += String.fromCharCode(...chunk);
-  }
-
-  return btoa(binary);
-}
-
-// ======================================================
-// PARSE OPENAI OUTPUT
-// ======================================================
-
-function getOpenAIText(
-  response: any,
-): string {
-  if (
-    typeof response?.output_text === "string" &&
-    response.output_text.trim()
-  ) {
-    return response.output_text.trim();
-  }
-
-  const output =
-    Array.isArray(response?.output)
-      ? response.output
-      : [];
-
-  for (const item of output) {
-    if (!Array.isArray(item?.content)) {
+    if (
+      !Array.isArray(rawCoordinate) ||
+      rawCoordinate.length < 2
+    ) {
       continue;
     }
 
-    for (const content of item.content) {
+
+    const longitude =
+      Number(rawCoordinate[0]);
+
+
+    const latitude =
+      Number(rawCoordinate[1]);
+
+
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude)
+    ) {
+      continue;
+    }
+
+
+    coordinates.push({
+      latitude,
+      longitude,
+    });
+  }
+
+
+  return coordinates;
+}
+
+
+// ============================================================
+// NORMALIZE DIRECTIONS / INSTRUCTIONS
+// ============================================================
+
+function normalizeInstructions(
+  segments: ORSSegment[],
+) {
+
+  const instructions: {
+    instruction: string;
+    name: string | null;
+    distance: number | null;
+    duration: number | null;
+    type: number | null;
+    way_points: [number, number] | null;
+  }[] = [];
+
+
+  for (
+    const segment
+    of segments
+  ) {
+
+    const steps =
+      Array.isArray(segment.steps)
+        ? segment.steps
+        : [];
+
+
+    for (
+      const step
+      of steps
+    ) {
+
       if (
-        content?.type === "output_text" &&
-        typeof content?.text === "string"
+        typeof step.instruction !==
+          "string" ||
+        !step.instruction.trim()
       ) {
-        return content.text.trim();
+        continue;
       }
+
+
+      instructions.push({
+        instruction:
+          step.instruction,
+
+        name:
+          typeof step.name === "string"
+            ? step.name
+            : null,
+
+        distance:
+          typeof step.distance === "number"
+            ? step.distance
+            : null,
+
+        duration:
+          typeof step.duration === "number"
+            ? step.duration
+            : null,
+
+        type:
+          typeof step.type === "number"
+            ? step.type
+            : null,
+
+        way_points:
+          Array.isArray(step.way_points) &&
+          step.way_points.length >= 2
+            ? [
+                Number(
+                  step.way_points[0],
+                ),
+
+                Number(
+                  step.way_points[1],
+                ),
+              ]
+            : null,
+      });
     }
   }
 
-  return "";
+
+  return instructions;
 }
 
-// ======================================================
-// COMPARISON JSON SCHEMA
-// ======================================================
 
-function comparisonSchema() {
-  return {
-    type: "object",
-    additionalProperties: false,
+// ============================================================
+// MAIN EDGE FUNCTION
+// ============================================================
 
-    properties: {
-      enteredValue: {
-        type: [
-          "string",
-          "null",
-        ],
-      },
+serve(
+  async (
+    req: Request,
+  ): Promise<Response> => {
 
-      idValue: {
-        type: [
-          "string",
-          "null",
-        ],
-      },
+    // ========================================================
+    // CORS
+    // ========================================================
 
-      matched: {
-        type: [
-          "boolean",
-          "null",
-        ],
-      },
+    if (
+      req.method === "OPTIONS"
+    ) {
 
-      confidence: {
-        type: [
-          "number",
-          "null",
-        ],
-      },
-    },
+      return new Response(
+        "ok",
+        {
+          headers:
+            corsHeaders,
+        },
+      );
+    }
 
-    required: [
-      "enteredValue",
-      "idValue",
-      "matched",
-      "confidence",
-    ],
-  };
-}
 
-// ======================================================
-// MAIN FUNCTION
-// ======================================================
-//
-// PRE-ACCOUNT FLOW:
-//
-// This handler intentionally performs no Supabase user-session check.
-//
-// The caller does NOT need a Supabase user session.
-// Supabase JWT verification must be disabled for this function.
-//
-// IMPORTANT:
-// This endpoint is intentionally callable before account creation.
-// Add CAPTCHA / rate limiting before production launch to reduce abuse.
-//
-// Supabase function JWT verification must also be disabled
-// for this function:
-//
-// [functions.verify-onboarding-id]
-// verify_jwt = false
-//
-// ======================================================
+    // ========================================================
+    // METHOD VALIDATION
+    // ========================================================
 
-Deno.serve(async (req: Request) => {
-      // ==================================================
-      // CORS PREFLIGHT
-      // ==================================================
+    if (
+      req.method !== "POST"
+    ) {
 
-      if (req.method === "OPTIONS") {
-        return new Response(
-          "ok",
-          {
-            headers: corsHeaders,
-          },
+      return jsonResponse(
+        {
+          error:
+            "Method not allowed.",
+        },
+        405,
+      );
+    }
+
+
+    try {
+
+      // ======================================================
+      // OPENROUTESERVICE SECRET
+      // ======================================================
+
+      const orsApiKey =
+        Deno.env.get(
+          "OPENROUTESERVICE_API_KEY",
         );
-      }
 
-      // ==================================================
-      // POST ONLY
-      // ==================================================
 
-      if (req.method !== "POST") {
-        return jsonResponse(
-          {
-            success: false,
-            status: "error",
-            message: "Method not allowed.",
-          },
-          405,
-        );
-      }
-
-      try {
-        // ==================================================
-        // OPENAI SECRET
-        // ==================================================
-
-        const OPENAI_API_KEY =
-          Deno.env.get(
-            "OPENAI_API_KEY",
-          );
-
-        if (!OPENAI_API_KEY) {
-          console.error(
-            "OPENAI_API_KEY is not configured.",
-          );
-
-          return jsonResponse(
-            {
-              success: false,
-              status: "error",
-              errorType: "service_error",
-              message:
-                "The ID verification service is not configured.",
-            },
-            500,
-          );
-        }
-
-        // ==================================================
-        // READ MULTIPART FORM
-        // ==================================================
-
-        let formData: FormData;
-
-        try {
-          formData =
-            await req.formData();
-        } catch {
-          return jsonResponse(
-            {
-              success: false,
-              status: "error",
-              errorType: "request_error",
-              message:
-                "The verification request was invalid.",
-            },
-            400,
-          );
-        }
-
-        // ==================================================
-        // ONBOARDING INFORMATION
-        // ==================================================
-
-        const firstName =
-          cleanString(
-            formData.get(
-              "firstName",
-            ),
-          );
-
-        const lastName =
-          cleanString(
-            formData.get(
-              "lastName",
-            ),
-          );
-
-        const displayName =
-          cleanString(
-            formData.get(
-              "displayName",
-            ),
-          );
-
-        // Purpose:
-        // Keeps the original onboarding birthday for the
-        // secure signup ticket while also creating the
-        // normalized date used by ID comparison.
-        const birthdayInput =
-          cleanString(
-            formData.get(
-              "birthday",
-            ),
-          );
-
-        const birthday =
-          normalizeDate(
-            birthdayInput,
-          );
-
-        const city =
-          cleanString(
-            formData.get(
-              "city",
-            ),
-          );
-
-        const state =
-          cleanString(
-            formData.get(
-              "state",
-            ),
-          );
-
-        const country =
-          cleanString(
-            formData.get(
-              "country",
-            ),
-          );
-
-        // ==================================================
-        // REQUIRED FIELDS
-        // ==================================================
-
-        if (!firstName) {
-          return jsonResponse(
-            {
-              success: false,
-              status: "error",
-              errorType: "request_error",
-              message: "First name is required.",
-            },
-            400,
-          );
-        }
-
-        if (!lastName) {
-          return jsonResponse(
-            {
-              success: false,
-              status: "error",
-              errorType: "request_error",
-              message: "Last name is required.",
-            },
-            400,
-          );
-        }
-
-        if (!birthday) {
-          return jsonResponse(
-            {
-              success: false,
-              status: "error",
-              errorType: "request_error",
-              message: "Date of birth is required.",
-            },
-            400,
-          );
-        }
-
-        // ==================================================
-        // GET ID IMAGE
-        // ==================================================
-
-        const idImage =
-          formData.get(
-            "idImage",
-          );
-
-        if (!(idImage instanceof File)) {
-          return jsonResponse(
-            {
-              success: false,
-              status: "unable_to_verify",
-              errorType: "image_error",
-              message:
-                "A front image of the ID is required.",
-              informationMatched: false,
-              requiresManualReview: true,
-            },
-            400,
-          );
-        }
-
-        // ==================================================
-        // EMPTY IMAGE
-        // ==================================================
-
-        if (idImage.size === 0) {
-          console.error(
-            "ID image upload contained zero bytes.",
-          );
-
-          return jsonResponse(
-            {
-              success: false,
-              status: "unable_to_verify",
-              errorType: "image_error",
-              message:
-                "The uploaded ID image was empty. Please take or select the photo again.",
-              informationMatched: false,
-              requiresManualReview: true,
-            },
-            400,
-          );
-        }
-
-
-        // ==================================================
-        // IMAGE TYPE
-        // ==================================================
-
-        if (
-          !idImage.type ||
-          !idImage.type.startsWith(
-            "image/",
-          )
-        ) {
-          return jsonResponse(
-            {
-              success: false,
-              status: "unable_to_verify",
-              errorType: "image_error",
-              message:
-                "The uploaded file must be an image.",
-              informationMatched: false,
-              requiresManualReview: true,
-            },
-            400,
-          );
-        }
-
-        // ==================================================
-        // IMAGE SIZE
-        // ==================================================
-
-        if (
-          idImage.size >
-          MAX_IMAGE_SIZE_BYTES
-        ) {
-          return jsonResponse(
-            {
-              success: false,
-              status: "unable_to_verify",
-              errorType: "image_error",
-              message:
-                "The ID image is too large.",
-              informationMatched: false,
-              requiresManualReview: true,
-            },
-            413,
-          );
-        }
-
-        // ==================================================
-        // CONVERT IMAGE
-        // ==================================================
-
-        const base64Image =
-          await fileToBase64(
-            idImage,
-          );
-
-        const mimeType =
-          idImage.type ||
-          "image/jpeg";
-
-        const imageDataUrl =
-          `data:${mimeType};base64,${base64Image}`;
-
-        // ==================================================
-        // INSTRUCTIONS FOR AI
-        // ==================================================
-
-        const systemInstructions = `
-You are assisting with an onboarding identity-information comparison.
-
-Your ONLY task is to:
-
-1. Inspect the FRONT image supplied by the user.
-2. Determine whether it appears to contain an identity document with readable identity information.
-3. Read only the identity fields needed for comparison.
-4. Compare those readable fields with the onboarding information supplied by the application.
-5. Return structured JSON.
-
-You are NOT authenticating the physical document.
-
-Do NOT claim:
-- that the document is genuine,
-- that it was actually issued by a government,
-- that it has not been altered,
-- that the person submitting it is the person pictured,
-- or that the document passes forensic authentication.
-
-If information is obscured, uncertain, missing, or unreadable, return null for that value and mark the comparison appropriately.
-
-Names:
-Ignore harmless differences in capitalization, punctuation, spacing, and obvious formatting.
-
-Birthday:
-Compare the actual calendar date, not formatting.
-
-Location:
-Only mark city, state, or country as mismatched when both the entered value and the ID value are sufficiently clear.
-
-A missing optional location field should not by itself cause the entire verification to fail.
-
-The required identity fields are:
-- first name
-- last name
-- date of birth
-
-For informationMatched to be true:
-- first name must match,
-- last name must match,
-- birthday must match,
-- and there must be no clear contradiction in another compared field.
-
-If the image cannot be read reliably, set:
-informationMatched = false
-requiresManualReview = true
-`;
-
-        const userComparisonData = {
-          firstName,
-          lastName,
-          displayName,
-          birthday,
-          city,
-          state,
-          country,
-        };
-
-        // ==================================================
-        // OPENAI REQUEST
-        // ==================================================
-
-        const openAIResponse =
-          await fetch(
-            "https://api.openai.com/v1/responses",
-            {
-              method: "POST",
-
-              headers: {
-                "Authorization":
-                  `Bearer ${OPENAI_API_KEY}`,
-
-                "Content-Type":
-                  "application/json",
-              },
-
-              body: JSON.stringify({
-                model:
-                  OPENAI_MODEL,
-
-                instructions:
-                  systemInstructions,
-
-                input: [
-                  {
-                    role: "user",
-
-                    content: [
-                      {
-                        type:
-                          "input_text",
-
-                        text:
-                          `Compare the visible information on this ID image against the following onboarding information:\n\n${JSON.stringify(
-                            userComparisonData,
-                            null,
-                            2,
-                          )}`,
-                      },
-
-                      {
-                        type:
-                          "input_image",
-
-                        image_url:
-                          imageDataUrl,
-
-                        detail:
-                          "high",
-                      },
-                    ],
-                  },
-                ],
-
-                text: {
-                  format: {
-                    type:
-                      "json_schema",
-
-                    name:
-                      "identity_information_comparison",
-
-                    strict:
-                      true,
-
-                    schema: {
-                      type:
-                        "object",
-
-                      additionalProperties:
-                        false,
-
-                      properties: {
-                        documentReadable: {
-                          type:
-                            "boolean",
-                        },
-
-                        appearsToBeIdentityDocument: {
-                          type:
-                            "boolean",
-                        },
-
-                        extracted: {
-                          type:
-                            "object",
-
-                          additionalProperties:
-                            false,
-
-                          properties: {
-                            firstName: {
-                              type: [
-                                "string",
-                                "null",
-                              ],
-                            },
-
-                            lastName: {
-                              type: [
-                                "string",
-                                "null",
-                              ],
-                            },
-
-                            birthday: {
-                              type: [
-                                "string",
-                                "null",
-                              ],
-                            },
-
-                            city: {
-                              type: [
-                                "string",
-                                "null",
-                              ],
-                            },
-
-                            state: {
-                              type: [
-                                "string",
-                                "null",
-                              ],
-                            },
-
-                            country: {
-                              type: [
-                                "string",
-                                "null",
-                              ],
-                            },
-                          },
-
-                          required: [
-                            "firstName",
-                            "lastName",
-                            "birthday",
-                            "city",
-                            "state",
-                            "country",
-                          ],
-                        },
-
-                        comparisons: {
-                          type:
-                            "object",
-
-                          additionalProperties:
-                            false,
-
-                          properties: {
-                            firstName:
-                              comparisonSchema(),
-
-                            lastName:
-                              comparisonSchema(),
-
-                            birthday:
-                              comparisonSchema(),
-
-                            city:
-                              comparisonSchema(),
-
-                            state:
-                              comparisonSchema(),
-
-                            country:
-                              comparisonSchema(),
-                          },
-
-                          required: [
-                            "firstName",
-                            "lastName",
-                            "birthday",
-                            "city",
-                            "state",
-                            "country",
-                          ],
-                        },
-
-                        informationMatched: {
-                          type:
-                            "boolean",
-                        },
-
-                        requiresManualReview: {
-                          type:
-                            "boolean",
-                        },
-
-                        explanation: {
-                          type:
-                            "string",
-                        },
-                      },
-
-                      required: [
-                        "documentReadable",
-                        "appearsToBeIdentityDocument",
-                        "extracted",
-                        "comparisons",
-                        "informationMatched",
-                        "requiresManualReview",
-                        "explanation",
-                      ],
-                    },
-                  },
-                },
-              }),
-            },
-          );
-
-        // ==================================================
-        // OPENAI ERROR
-        // ==================================================
-
-        if (!openAIResponse.ok) {
-          const errorText =
-            await openAIResponse.text();
-
-          console.error(
-            "OpenAI verification request failed:",
-            openAIResponse.status,
-            errorText,
-          );
-
-          return jsonResponse(
-            {
-              success: false,
-              status: "error",
-              errorType: "service_error",
-              message:
-                "The AI verification service could not process the ID.",
-              informationMatched: false,
-              requiresManualReview: true,
-            },
-            502,
-          );
-        }
-
-        // ==================================================
-        // READ OPENAI RESPONSE
-        // ==================================================
-
-        const openAIData =
-          await openAIResponse.json();
-
-        const outputText =
-          getOpenAIText(
-            openAIData,
-          );
-
-        if (!outputText) {
-          console.error(
-            "OpenAI returned no structured text.",
-          );
-
-          return jsonResponse(
-            {
-              success: false,
-              status:
-                "unable_to_verify",
-              errorType: "analysis_error",
-              message:
-                "The ID could not be analyzed.",
-              informationMatched: false,
-              requiresManualReview: true,
-            },
-            422,
-          );
-        }
-
-        // ==================================================
-        // PARSE STRUCTURED RESULT
-        // ==================================================
-
-        let aiResult:
-          OpenAIIdentityResult;
-
-        try {
-          aiResult =
-            JSON.parse(
-              outputText,
-            );
-        } catch (error) {
-          console.error(
-            "Unable to parse AI result:",
-            error,
-          );
-
-          return jsonResponse(
-            {
-              success: false,
-              status:
-                "unable_to_verify",
-              errorType: "analysis_error",
-              message:
-                "The verification result could not be interpreted.",
-              informationMatched: false,
-              requiresManualReview: true,
-            },
-            422,
-          );
-        }
-
-        // ==================================================
-        // DETERMINE STATUS
-        // ==================================================
-
-        let verificationStatus:
-          | "matched"
-          | "mismatch"
-          | "unable_to_verify";
-
-        if (
-          !aiResult.documentReadable ||
-          !aiResult.appearsToBeIdentityDocument
-        ) {
-          verificationStatus =
-            "unable_to_verify";
-        } else if (
-          aiResult.informationMatched
-        ) {
-          verificationStatus =
-            "matched";
-        } else {
-          verificationStatus =
-            "mismatch";
-        }
-
-        // ==================================================
-        // SECURE VERIFIED SIGNUP TICKET
-        // ==================================================
-
-        let verificationTicket:
-          string | null =
-          null;
-
-
-        // Purpose:
-        // Issues the one-time signup ticket only after
-        // the server has determined that the submitted
-        // onboarding information matches the visible ID.
-        if (
-          verificationStatus ===
-          "matched"
-        ) {
-
-          try {
-
-            verificationTicket =
-              await createVerificationTicket(
-                {
-                  firstName,
-                  lastName,
-                  birthday:
-                    birthdayInput,
-                },
-              );
-
-          } catch (ticketError) {
-
-            console.error(
-              "Unable to issue verification ticket:",
-              ticketError,
-            );
-
-
-            // Purpose:
-            // Never returns a successful verified result
-            // unless the secure proof ticket was created.
-            return jsonResponse(
-              {
-                success: false,
-
-                status:
-                  "error",
-
-                errorType:
-                  "ticket_error",
-
-                message:
-                  "Your ID information matched, but secure account verification could not be completed. Please try again.",
-
-                informationMatched:
-                  true,
-
-                requiresManualReview:
-                  false,
-              },
-              500,
-            );
-          }
-        }
-
-
-        // ==================================================
-        // RETURN RESULT
-        // ==================================================
-        //
-        // There is still no user_onboarding update here because
-        // the person does not have an account/user_id yet.
-        //
-        // A successful match now creates only a short-lived,
-        // single-use verification ticket for account creation.
-        //
-        // The client should:
-        //
-        // matched          -> onboarding_success
-        // mismatch         -> mismatch card / retry
-        // unable_to_verify -> retry/readability message
-        // error            -> technical service error
-        //
-        // ==================================================
-
-        return jsonResponse(
-          {
-            success:
-              verificationStatus ===
-              "matched",
-
-            status:
-              verificationStatus,
-
-            message:
-              verificationStatus ===
-              "matched"
-                ? "The information on the ID matches the onboarding information."
-                : verificationStatus ===
-                    "mismatch"
-                  ? "Some information on the ID does not match the onboarding information."
-                  : "The ID could not be verified automatically.",
-
-            // Purpose:
-            // Returns the raw ticket once. Mismatch and
-            // unreadable results never receive a ticket.
-            verificationTicket:
-              verificationStatus ===
-              "matched"
-                ? verificationTicket
-                : null,
-
-            informationMatched:
-              aiResult.informationMatched,
-
-            requiresManualReview:
-              aiResult.requiresManualReview,
-
-            documentReadable:
-              aiResult.documentReadable,
-
-            appearsToBeIdentityDocument:
-              aiResult.appearsToBeIdentityDocument,
-
-            extracted:
-              aiResult.extracted,
-
-            comparisons:
-              aiResult.comparisons,
-
-            explanation:
-              aiResult.explanation,
-          },
-          200,
-        );
-      } catch (error) {
-        // ==================================================
-        // UNEXPECTED ERROR
-        // ==================================================
+      if (
+        !orsApiKey
+      ) {
 
         console.error(
-          "Unexpected verify-onboarding-id error:",
-          error,
+          "OPENROUTESERVICE_API_KEY is not configured.",
         );
+
 
         return jsonResponse(
           {
-            success: false,
-            status: "error",
-            errorType: "service_error",
-            message:
-              "Something went wrong while checking the ID.",
-            informationMatched: false,
-            requiresManualReview: true,
+            error:
+              "OPENROUTESERVICE_API_KEY is not configured in Supabase Edge Function secrets.",
           },
           500,
         );
       }
-});
+
+
+      // ======================================================
+      // READ REQUEST
+      // ======================================================
+
+      let body:
+        RouteRequest;
+
+
+      try {
+
+        body =
+          await req.json();
+
+      } catch (
+        error
+      ) {
+
+        console.error(
+          "Could not parse routing request:",
+          error,
+        );
+
+
+        return jsonResponse(
+          {
+            error:
+              "Invalid JSON request body.",
+          },
+          400,
+        );
+      }
+
+
+      // ======================================================
+      // ACTION
+      // ======================================================
+
+      const action =
+        body.action ??
+        "route";
+
+
+      if (
+        action !== "route"
+      ) {
+
+        return jsonResponse(
+          {
+            error:
+              `Unsupported routing action: ${String(action)}`,
+          },
+          400,
+        );
+      }
+
+
+      // ======================================================
+      // ORIGIN / DESTINATION
+      // ======================================================
+
+      const origin =
+        body.origin;
+
+
+      const destination =
+        body.destination;
+
+
+      if (
+        !isCoordinate(origin)
+      ) {
+
+        return jsonResponse(
+          {
+            error:
+              "A valid origin coordinate is required.",
+          },
+          400,
+        );
+      }
+
+
+      if (
+        !isCoordinate(destination)
+      ) {
+
+        return jsonResponse(
+          {
+            error:
+              "A valid destination coordinate is required.",
+          },
+          400,
+        );
+      }
+
+
+      // ======================================================
+      // OPENROUTESERVICE REQUEST
+      // ======================================================
+      //
+      // ORS expects:
+      //
+      // [longitude, latitude]
+      //
+      // NOT:
+      //
+      // [latitude, longitude]
+      //
+      // ======================================================
+
+      const orsRequestBody = {
+        coordinates: [
+          [
+            origin.longitude,
+            origin.latitude,
+          ],
+
+          [
+            destination.longitude,
+            destination.latitude,
+          ],
+        ],
+
+        instructions:
+          true,
+      };
+
+
+      console.log(
+        "Companion route request:",
+        {
+          origin,
+          destination,
+        },
+      );
+
+
+      const orsResponse =
+        await fetch(
+          ORS_API_URL,
+          {
+            method:
+              "POST",
+
+            headers: {
+              Authorization:
+                orsApiKey,
+
+              "Content-Type":
+                "application/json",
+
+              Accept:
+                "application/geo+json, application/json",
+            },
+
+            body:
+              JSON.stringify(
+                orsRequestBody,
+              ),
+          },
+        );
+
+
+      // ======================================================
+      // OPENROUTESERVICE ERROR
+      // ======================================================
+
+      if (
+        !orsResponse.ok
+      ) {
+
+        const errorText =
+          await orsResponse.text();
+
+
+        console.error(
+          "OpenRouteService error:",
+          orsResponse.status,
+          errorText,
+        );
+
+
+        return jsonResponse(
+          {
+            error:
+              `OpenRouteService returned HTTP ${orsResponse.status}.`,
+          },
+          502,
+        );
+      }
+
+
+      // ======================================================
+      // PARSE OPENROUTESERVICE RESPONSE
+      // ======================================================
+
+      const routeData =
+        await orsResponse.json()
+          as ORSGeoJsonResponse;
+
+
+      const feature =
+        Array.isArray(
+          routeData.features,
+        )
+          ? routeData.features[0]
+          : undefined;
+
+
+      if (
+        !feature
+      ) {
+
+        console.error(
+          "OpenRouteService returned no route feature.",
+          routeData,
+        );
+
+
+        return jsonResponse(
+          {
+            error:
+              "OpenRouteService could not find a walking route.",
+          },
+          502,
+        );
+      }
+
+
+      // ======================================================
+      // ROUTE GEOMETRY
+      // ======================================================
+
+      const coordinates =
+        normalizeRouteCoordinates(
+          feature.geometry
+            ?.coordinates,
+        );
+
+
+      if (
+        coordinates.length < 2
+      ) {
+
+        console.error(
+          "OpenRouteService returned invalid route geometry.",
+          feature.geometry,
+        );
+
+
+        return jsonResponse(
+          {
+            error:
+              "The routing service did not return valid route coordinates.",
+          },
+          502,
+        );
+      }
+
+
+      // ======================================================
+      // ROUTE SUMMARY
+      // ======================================================
+
+      const summary =
+        feature.properties
+          ?.summary;
+
+
+      const segments =
+        Array.isArray(
+          feature.properties
+            ?.segments,
+        )
+          ? feature.properties!
+              .segments!
+          : [];
+
+
+      let distanceMeters:
+        number | null =
+          typeof summary
+            ?.distance ===
+            "number"
+            ? summary.distance
+            : null;
+
+
+      let duration:
+        number | null =
+          typeof summary
+            ?.duration ===
+            "number"
+            ? summary.duration
+            : null;
+
+
+      // ======================================================
+      // SUMMARY FALLBACK
+      // ======================================================
+      //
+      // Normally ORS supplies properties.summary.
+      //
+      // If it doesn't, calculate the totals from segments.
+      //
+      // ======================================================
+
+      if (
+        distanceMeters === null &&
+        segments.length > 0
+      ) {
+
+        const distances =
+          segments
+            .map(
+              (
+                segment
+              ) =>
+                segment.distance,
+            )
+
+            .filter(
+              (
+                value
+              ): value is number =>
+                typeof value ===
+                  "number",
+            );
+
+
+        if (
+          distances.length > 0
+        ) {
+
+          distanceMeters =
+            distances.reduce(
+              (
+                total,
+                value,
+              ) =>
+                total +
+                value,
+              0,
+            );
+        }
+      }
+
+
+      if (
+        duration === null &&
+        segments.length > 0
+      ) {
+
+        const durations =
+          segments
+            .map(
+              (
+                segment
+              ) =>
+                segment.duration,
+            )
+
+            .filter(
+              (
+                value
+              ): value is number =>
+                typeof value ===
+                  "number",
+            );
+
+
+        if (
+          durations.length > 0
+        ) {
+
+          duration =
+            durations.reduce(
+              (
+                total,
+                value,
+              ) =>
+                total +
+                value,
+              0,
+            );
+        }
+      }
+
+
+      // ======================================================
+      // TURN-BY-TURN INSTRUCTIONS
+      // ======================================================
+
+      const instructions =
+        normalizeInstructions(
+          segments,
+        );
+
+
+      // ======================================================
+      // DEBUG LOG
+      // ======================================================
+
+      console.log(
+        "Companion route calculated:",
+        {
+          coordinateCount:
+            coordinates.length,
+
+          distanceMeters,
+
+          duration,
+
+          instructionCount:
+            instructions.length,
+        },
+      );
+
+
+      // ======================================================
+      // IMPORTANT:
+      //
+      // DO NOT wrap this in:
+      //
+      // {
+      //   success: true,
+      //   data: ...
+      // }
+      //
+      // homebackup_companions.tsx expects these properties
+      // directly on the Edge Function response.
+      // ======================================================
+
+      return jsonResponse(
+        {
+          coordinates,
+
+          distanceMeters,
+
+          duration,
+
+          instructions,
+        },
+        200,
+      );
+
+    } catch (
+      error
+    ) {
+
+      // ======================================================
+      // UNEXPECTED ERROR
+      // ======================================================
+
+      console.error(
+        "Unexpected companion-routing error:",
+        error,
+      );
+
+
+      return jsonResponse(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "An unexpected routing error occurred.",
+        },
+        500,
+      );
+    }
+  },
+);

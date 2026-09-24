@@ -116,7 +116,7 @@ export const MAX_ACCEPTED_GPS_AGE_MS = 12_000;
 // Browser scan thresholds from the current Home file.
 export const BROWSER_SCAN_ACCURACY_TARGET_METERS = 75;
 export const BROWSER_MAX_ACCEPTED_ACCURACY_METERS = 500;
-export const BROWSER_SCAN_FIX_TIMEOUT_MS = 10_000;
+export const BROWSER_SCAN_FIX_TIMEOUT_MS = 30_000;
 
 // =======================
 // BASIC LOCATION HELPERS
@@ -277,12 +277,22 @@ export function getBestBrowserCurrentLocation(): Promise<Location.LocationObject
         navigator.geolocation.clearWatch(watchId);
       }
 
+      // watchPosition did not produce a usable sample in time.
+      // Give Chrome/Windows one final one-shot location request before
+      // failing the Companion scan.
       settled = true;
-      reject(
-        new Error(
-          "Timed out while waiting for browser location.",
-        ),
-      );
+
+      void getBrowserCurrentLocation()
+        .then((fallbackLocation) => {
+          resolve(fallbackLocation);
+        })
+        .catch(() => {
+          reject(
+            new Error(
+              "Timed out while waiting for browser location.",
+            ),
+          );
+        });
     }, BROWSER_SCAN_FIX_TIMEOUT_MS);
 
     watchId = navigator.geolocation.watchPosition(
@@ -1253,6 +1263,26 @@ export function useHomeBackupLocation(
           throw new Error(
             "This browser does not support location services.",
           );
+        }
+
+        const permissionState =
+          await getBrowserLocationPermissionState();
+
+        if (permissionState === "denied") {
+          throw new Error(
+            "Location permission is blocked in Chrome. Allow Location for localhost, then try again.",
+          );
+        }
+
+        if (permissionState !== "granted") {
+          const permissionGranted =
+            await askForBrowserLocationPermission();
+
+          if (!permissionGranted) {
+            throw new Error(
+              "Mission Trail needs location permission. Click Allow when Chrome asks for your location.",
+            );
+          }
         }
 
         const freshLocation =

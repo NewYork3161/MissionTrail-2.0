@@ -62,6 +62,8 @@ type MarkerProps = {
 
   zIndex?: number;
 
+  onPress?: (event?: any) => void;
+
   [key: string]: any;
 
 };
@@ -1020,6 +1022,8 @@ export function Marker({
 
   zIndex = 10,
 
+  onPress,
+
 }: MarkerProps) {
 
   const map = React.useContext(WebMapContext);
@@ -1088,7 +1092,7 @@ export function Marker({
 
     <View
 
-      pointerEvents="none"
+      pointerEvents="box-none"
 
       style={[
 
@@ -1108,7 +1112,69 @@ export function Marker({
 
     >
 
-      <View style={styles.markerAnchor}>{markerContent}</View>
+      {React.createElement(
+
+        "div",
+
+        {
+
+          onClick: (event: any) => {
+
+            event.stopPropagation?.();
+
+            onPress?.(event);
+
+          },
+
+          role: onPress ? "button" : undefined,
+
+          tabIndex: onPress ? 0 : undefined,
+
+          onKeyDown: (event: any) => {
+
+            if (!onPress) return;
+
+            if (event.key === "Enter" || event.key === " ") {
+
+              event.preventDefault?.();
+
+              event.stopPropagation?.();
+
+              onPress(event);
+
+            }
+
+          },
+
+          style: {
+
+            position: "absolute",
+
+            left: "-14px",
+
+            top: "-28px",
+
+            width: "28px",
+
+            height: "28px",
+
+            display: "flex",
+
+            alignItems: "center",
+
+            justifyContent: "center",
+
+            cursor: onPress ? "pointer" : "default",
+
+            pointerEvents: "auto",
+
+          },
+
+        },
+
+        markerContent,
+
+      )}
 
       {title && !children
 
@@ -1117,6 +1183,14 @@ export function Marker({
             "div",
 
             {
+
+              onClick: (event: any) => {
+
+                event.stopPropagation?.();
+
+                onPress?.(event);
+
+              },
 
               style: {
 
@@ -1150,6 +1224,10 @@ export function Marker({
 
                 boxShadow: "0 0 12px rgba(192,132,252,0.85)",
 
+                cursor: onPress ? "pointer" : "default",
+
+                pointerEvents: "auto",
+
               },
 
             },
@@ -1165,6 +1243,7 @@ export function Marker({
   );
 
 }
+
 
 export function Polyline({
 
