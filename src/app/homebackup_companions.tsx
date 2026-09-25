@@ -11,6 +11,9 @@ import {
   Platform,
 } from "react-native";
 
+import * as Speech from "expo-speech";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 import { supabase } from "../../lib/supabase";
 
 import {
@@ -141,6 +144,10 @@ export type HomeBackupCompanionOptions = {
   onError?: (
     message: string | null
   ) => void;
+
+  onCompanionCaptured?: (
+    companion: CompanionCatalogRow
+  ) => void;
 };
 
 
@@ -237,6 +244,51 @@ const COMPANION_REROUTE_DISTANCE_METERS =
 
 const COMPANION_REROUTE_MIN_INTERVAL_MS =
   8_000;
+
+
+// ============================================================
+// DEMO ROUTE SIMULATION
+// ============================================================
+//
+// The demo marker automatically travels along the exact walking
+// route returned by the routing service. Real GPS behavior remains
+// available when this flag is false.
+//
+// ============================================================
+
+const COMPANION_DEMO_SIMULATION_ENABLED = true;
+const COMPANION_DEMO_SIMULATION_TICK_MS = 100;
+const COMPANION_DEMO_SIMULATION_DURATION_MS = 30_000;
+
+
+// ============================================================
+// DEMO CAPTURE PERSISTENCE
+// ============================================================
+//
+// Local demo Companions do not have real Supabase companion IDs,
+// so they cannot be inserted into user_companions.
+//
+// Instead, persist the successful demo capture locally. The
+// Companion page can read the same key and switch from the egg
+// to /glbModels/Draggon.glb.
+//
+// ============================================================
+
+export const DEMO_CAPTURED_COMPANION_STORAGE_KEY =
+  "@missiontrail/demo-captured-companion";
+
+export const DEMO_CAPTURED_COMPANION_MODEL =
+  "/glbModels/Draggon.glb";
+
+
+
+// ============================================================
+// SPOKEN WALKING DIRECTIONS
+// ============================================================
+
+const COMPANION_VOICE_LANGUAGE = "en-US";
+const COMPANION_VOICE_RATE = 0.92;
+const COMPANION_VOICE_PITCH = 1.0;
 
 
 // ============================================================
@@ -503,6 +555,10 @@ function normalizeRouteStep(
 async function callCompanionRoutingProxy(
   body: Record<string, unknown>,
 ): Promise<CompanionRoutingResponse> {
+  console.log("========== COMPANION EDGE FUNCTION TEST ==========");
+  console.log("[ROUTE TEST] Function:", ORS_PROXY_FUNCTION);
+  console.log("[ROUTE TEST] Request body:", body);
+  console.log("==================================================");
   const { data: sessionData } =
     await supabase.auth.getSession();
 
@@ -647,6 +703,11 @@ async function callCompanionRoutingProxy(
 
   const { data, error } = invokeResult;
 
+  console.log("========== COMPANION EDGE FUNCTION RESULT ==========");
+  console.log("[ROUTE TEST] Supabase invoke data:", data);
+  console.log("[ROUTE TEST] Supabase invoke error:", error);
+  console.log("====================================================");
+
   if (error) {
     let details = "";
 
@@ -698,6 +759,12 @@ export async function getCompanionWalkingRoute(
 
   try {
 
+    console.log("========== WALKING ROUTE REQUEST ==========");
+    console.log("[ROUTE TEST] Origin:", origin);
+    console.log("[ROUTE TEST] Destination:", destination);
+    console.log("[ROUTE TEST] About to call companion-routing...");
+    console.log("===========================================");
+
     const data =
       await callCompanionRoutingProxy(
         {
@@ -709,6 +776,10 @@ export async function getCompanionWalkingRoute(
           destination,
         }
       );
+
+    console.log("========== WALKING ROUTE RAW RESPONSE ==========");
+    console.log("[ROUTE TEST] Routing service returned:", data);
+    console.log("================================================");
 
 
     const coordinates =
@@ -775,6 +846,13 @@ export async function getCompanionWalkingRoute(
 
         : [];
 
+
+    console.log("========== WALKING ROUTE PARSE TEST ==========");
+    console.log("[ROUTE TEST] Valid coordinate count:", coordinates.length);
+    console.log("[ROUTE TEST] Parsed instruction count:", steps.length);
+    console.log("[ROUTE TEST] Distance:", data.distanceMeters ?? null);
+    console.log("[ROUTE TEST] Duration:", data.duration ?? null);
+    console.log("==============================================");
 
     if (
       coordinates.length >= 2
@@ -1012,6 +1090,23 @@ async function saveCollectedCompanion(
       "local-demo-companion-"
     )
   ) {
+    await AsyncStorage.setItem(
+      DEMO_CAPTURED_COMPANION_STORAGE_KEY,
+      JSON.stringify({
+        captured: true,
+        id: companion.id,
+        companionKey: companion.companion_key,
+        name: companion.name,
+        model: DEMO_CAPTURED_COMPANION_MODEL,
+        capturedAt: new Date().toISOString(),
+      }),
+    );
+
+    console.log(
+      "[COMPANION CAPTURE] Demo Companion persisted:",
+      companion.id,
+    );
+
     return;
   }
 
@@ -1130,6 +1225,7 @@ export function useHomeBackupCompanions(
     isMovingTooFast,
     mapRef,
     onError,
+    onCompanionCaptured,
   } =
     options;
 
@@ -1292,6 +1388,51 @@ export function useHomeBackupCompanions(
     );
 
 
+
+  // Spoken-navigation state. We remember the last instruction so
+  // frequent GPS updates do not repeat the same sentence.
+  const lastSpokenInstructionRef =
+    useRef<string | null>(
+      null
+    );
+
+
+  const spokenRouteStepIndexRef =
+    useRef(
+      -1
+    );
+
+
+  const simulationIntervalRef =
+    useRef<ReturnType<typeof setInterval> | null>(
+      null
+    );
+
+  const simulationCoordinateRef =
+    useRef<Coordinate | null>(
+      null
+    );
+
+  const simulationRunningRef =
+    useRef(
+      false
+    );
+
+  const stopDemoSimulation =
+    useCallback(
+      () => {
+        if (simulationIntervalRef.current) {
+          clearInterval(simulationIntervalRef.current);
+          simulationIntervalRef.current = null;
+        }
+
+        simulationRunningRef.current = false;
+        simulationCoordinateRef.current = null;
+      },
+      [],
+    );
+
+
   // ==========================================================
   // ACTIVE DESTINATION
   // ==========================================================
@@ -1316,8 +1457,12 @@ export function useHomeBackupCompanions(
     useMemo(
       () => {
 
+        const effectiveCoordinate =
+          simulationCoordinateRef.current ??
+          playerCoordinate;
+
         if (
-          !playerCoordinate ||
+          !effectiveCoordinate ||
           !activeDestination
         ) {
           return null;
@@ -1325,13 +1470,14 @@ export function useHomeBackupCompanions(
 
 
         return calculateDistanceMeters(
-          playerCoordinate,
+          effectiveCoordinate,
           activeDestination
         );
 
       },
       [
         activeDestination,
+        companionWalkerCoordinate,
         playerCoordinate,
       ],
     );
@@ -1475,9 +1621,18 @@ export function useHomeBackupCompanions(
         rerouteInProgressRef.current =
           false;
 
+        stopDemoSimulation();
+
 
         companionCollectingRef.current =
           false;
+
+
+        Speech.stop();
+        lastSpokenInstructionRef.current =
+          null;
+        spokenRouteStepIndexRef.current =
+          -1;
 
 
         lastRoutedPlayerCoordinateRef.current =
@@ -1536,11 +1691,28 @@ export function useHomeBackupCompanions(
 
         try {
 
+          console.log("========== COMPANION CLICK / ROUTE TEST ==========");
+          console.log("[ROUTE TEST] Companion clicked:", index);
+          console.log("[ROUTE TEST] Companion:", companion.name);
+          console.log("[ROUTE TEST] Origin:", playerCoordinate);
+          console.log("[ROUTE TEST] Destination:", destination);
+          console.log("[ROUTE TEST] About to request walking route...");
+          console.log("==================================================");
+
           const route =
             await getCompanionWalkingRoute(
               playerCoordinate,
               destination
             );
+
+          console.log("========== ROUTE SUCCESS ==========");
+          console.log("[ROUTE TEST] API FIRED SUCCESSFULLY");
+          console.log("[ROUTE TEST] Coordinate count:", route.coordinates.length);
+          console.log("[ROUTE TEST] Distance meters:", route.distanceMeters);
+          console.log("[ROUTE TEST] Duration seconds:", route.duration);
+          console.log("[ROUTE TEST] Steps:", route.steps);
+          console.log("[ROUTE TEST] Full route:", route);
+          console.log("===================================");
 
 
           // The user may have clicked the other Companion while
@@ -1559,9 +1731,152 @@ export function useHomeBackupCompanions(
             true
           );
 
+
+          if (
+            COMPANION_DEMO_SIMULATION_ENABLED &&
+            route.coordinates.length >= 2
+          ) {
+            stopDemoSimulation();
+
+            simulationRunningRef.current = true;
+            simulationCoordinateRef.current =
+              route.coordinates[0];
+
+            setCompanionWalkerCoordinate(
+              route.coordinates[0]
+            );
+
+            const segmentLengths: number[] = [];
+            let totalRouteMeters = 0;
+
+            for (
+              let routeIndex = 1;
+              routeIndex < route.coordinates.length;
+              routeIndex += 1
+            ) {
+              const segmentMeters =
+                calculateDistanceMeters(
+                  route.coordinates[routeIndex - 1],
+                  route.coordinates[routeIndex]
+                );
+
+              segmentLengths.push(segmentMeters);
+              totalRouteMeters += segmentMeters;
+            }
+
+            const startedAt = Date.now();
+
+            simulationIntervalRef.current =
+              setInterval(
+                () => {
+                  const progress =
+                    Math.min(
+                      1,
+                      (Date.now() - startedAt) /
+                        COMPANION_DEMO_SIMULATION_DURATION_MS
+                    );
+
+                  const targetMeters =
+                    totalRouteMeters * progress;
+
+                  let walkedMeters = 0;
+                  let simulatedCoordinate =
+                    route.coordinates[
+                      route.coordinates.length - 1
+                    ];
+
+                  for (
+                    let segmentIndex = 0;
+                    segmentIndex < segmentLengths.length;
+                    segmentIndex += 1
+                  ) {
+                    const segmentMeters =
+                      segmentLengths[segmentIndex];
+
+                    if (
+                      walkedMeters + segmentMeters >=
+                      targetMeters
+                    ) {
+                      const start =
+                        route.coordinates[segmentIndex];
+
+                      const end =
+                        route.coordinates[segmentIndex + 1];
+
+                      const fraction =
+                        segmentMeters > 0
+                          ? Math.max(
+                              0,
+                              Math.min(
+                                1,
+                                (targetMeters - walkedMeters) /
+                                  segmentMeters
+                              )
+                            )
+                          : 1;
+
+                      simulatedCoordinate = {
+                        latitude:
+                          start.latitude +
+                          (end.latitude - start.latitude) *
+                            fraction,
+
+                        longitude:
+                          start.longitude +
+                          (end.longitude - start.longitude) *
+                            fraction,
+                      };
+
+                      break;
+                    }
+
+                    walkedMeters += segmentMeters;
+                  }
+
+                  simulationCoordinateRef.current =
+                    simulatedCoordinate;
+
+                  setCompanionWalkerCoordinate(
+                    simulatedCoordinate
+                  );
+
+                  if (progress >= 1) {
+                    if (simulationIntervalRef.current) {
+                      clearInterval(
+                        simulationIntervalRef.current
+                      );
+                      simulationIntervalRef.current = null;
+                    }
+
+                    simulationRunningRef.current = false;
+                    simulationCoordinateRef.current =
+                      destination;
+
+                    setCompanionWalkerCoordinate(
+                      destination
+                    );
+                  }
+                },
+                COMPANION_DEMO_SIMULATION_TICK_MS
+              );
+          }
+
         } catch (
           error
         ) {
+          console.error("========== ROUTE FAILURE ==========");
+          console.error("[ROUTE TEST] ROUTING FAILED");
+          console.error("[ROUTE TEST] Error:", error);
+          console.error(
+            "[ROUTE TEST] Message:",
+            error instanceof Error ? error.message : String(error)
+          );
+          console.error("[ROUTE TEST] Origin:", playerCoordinate);
+          console.error("[ROUTE TEST] Destination:", destination);
+          console.error("[ROUTE TEST] Companion index:", index);
+          console.error("[ROUTE TEST] Companion:", companion.name);
+          console.error("===================================");
+
 
           if (
             routeRequestIdRef.current !==
@@ -1600,6 +1915,7 @@ export function useHomeBackupCompanions(
         onError,
         playerCoordinate,
         selectedCompanions,
+        stopDemoSimulation,
       ],
     );
 
@@ -1652,6 +1968,8 @@ export function useHomeBackupCompanions(
 
           rerouteInProgressRef.current =
             false;
+
+          stopDemoSimulation();
 
           companionCollectingRef.current =
             false;
@@ -1847,6 +2165,7 @@ export function useHomeBackupCompanions(
       },
       [
         onError,
+        stopDemoSimulation,
         userId,
       ],
     );
@@ -1868,9 +2187,18 @@ export function useHomeBackupCompanions(
         rerouteInProgressRef.current =
           false;
 
+        stopDemoSimulation();
+
 
         companionCollectingRef.current =
           false;
+
+
+        Speech.stop();
+        lastSpokenInstructionRef.current =
+          null;
+        spokenRouteStepIndexRef.current =
+          -1;
 
 
         lastRoutedPlayerCoordinateRef.current =
@@ -1931,7 +2259,9 @@ export function useHomeBackupCompanions(
         );
 
       },
-      [],
+      [
+        stopDemoSimulation,
+      ],
     );
 
 
@@ -1951,7 +2281,9 @@ export function useHomeBackupCompanions(
       if (
         companionSearchState !==
           "traveling" ||
-        !playerCoordinate
+        !playerCoordinate ||
+        simulationRunningRef.current ||
+        simulationCoordinateRef.current
       ) {
         return;
       }
@@ -1992,6 +2324,14 @@ export function useHomeBackupCompanions(
       if (
         companionSearchState !==
           "traveling"
+      ) {
+        return;
+      }
+
+
+      if (
+        simulationRunningRef.current ||
+        simulationCoordinateRef.current
       ) {
         return;
       }
@@ -2199,6 +2539,190 @@ export function useHomeBackupCompanions(
 
 
   // ==========================================================
+  // SPOKEN TURN-BY-TURN NAVIGATION
+  // ==========================================================
+  //
+  // OpenRouteService gives each instruction a pair of route
+  // waypoint indexes. We find the route point closest to the
+  // live GPS position, then announce the next applicable step.
+  //
+  // The same instruction is never spoken twice unless a new
+  // route is calculated.
+  // ==========================================================
+
+  useEffect(
+    () => {
+
+      const navigationCoordinate =
+        simulationCoordinateRef.current ??
+        playerCoordinate;
+
+      if (
+        companionSearchState !==
+          "traveling" ||
+        !navigationCoordinate ||
+        companionRoute.length <
+          2 ||
+        routeSteps.length ===
+          0
+      ) {
+        return;
+      }
+
+
+      let nearestRouteIndex =
+        0;
+
+      let nearestDistanceMeters =
+        Number.POSITIVE_INFINITY;
+
+
+      companionRoute.forEach(
+        (
+          coordinate,
+          index
+        ) => {
+
+          const distance =
+            calculateDistanceMeters(
+              navigationCoordinate,
+              coordinate
+            );
+
+
+          if (
+            distance <
+            nearestDistanceMeters
+          ) {
+
+            nearestDistanceMeters =
+              distance;
+
+            nearestRouteIndex =
+              index;
+          }
+        }
+      );
+
+
+      let nextStepIndex =
+        routeSteps.findIndex(
+          (
+            step
+          ) => {
+
+            const endIndex =
+              step.wayPoints?.[1];
+
+            return (
+              typeof endIndex ===
+                "number" &&
+              endIndex >=
+                nearestRouteIndex
+            );
+          }
+        );
+
+
+      // Some routing responses may omit waypoint indexes.
+      // In that case, begin with the first instruction.
+      if (
+        nextStepIndex <
+        0
+      ) {
+
+        nextStepIndex =
+          Math.min(
+            routeSteps.length -
+              1,
+            Math.max(
+              0,
+              spokenRouteStepIndexRef.current +
+                1
+            )
+          );
+      }
+
+
+      const step =
+        routeSteps[
+          nextStepIndex
+        ];
+
+
+      if (
+        !step?.instruction?.trim()
+      ) {
+        return;
+      }
+
+
+      const instruction =
+        step.instruction.trim();
+
+
+      if (
+        spokenRouteStepIndexRef.current ===
+          nextStepIndex &&
+        lastSpokenInstructionRef.current ===
+          instruction
+      ) {
+        return;
+      }
+
+
+      spokenRouteStepIndexRef.current =
+        nextStepIndex;
+
+      lastSpokenInstructionRef.current =
+        instruction;
+
+
+      // Stop an older instruction before speaking the new one.
+      Speech.stop();
+
+      Speech.speak(
+        instruction,
+        {
+          language:
+            COMPANION_VOICE_LANGUAGE,
+
+          rate:
+            COMPANION_VOICE_RATE,
+
+          pitch:
+            COMPANION_VOICE_PITCH,
+        }
+      );
+
+    },
+    [
+      companionRoute,
+      companionSearchState,
+      companionWalkerCoordinate,
+      playerCoordinate,
+      routeSteps,
+    ],
+  );
+
+
+  // Stop speech when this Companion system unmounts.
+  useEffect(
+    () => {
+
+      return () => {
+        Speech.stop();
+        stopDemoSimulation();
+      };
+
+    },
+    [
+      stopDemoSimulation,
+    ],
+  );
+
+
+  // ==========================================================
   // COLLECTION CHECK
   // ==========================================================
 
@@ -2226,11 +2750,15 @@ export function useHomeBackupCompanions(
         ];
 
 
+      const collectionCoordinate =
+        simulationCoordinateRef.current ??
+        playerCoordinate;
+
       if (
         companionSearchState !==
           "traveling" ||
 
-        !playerCoordinate ||
+        !collectionCoordinate ||
 
         !companion ||
 
@@ -2246,7 +2774,7 @@ export function useHomeBackupCompanions(
 
       const distanceMeters =
         calculateDistanceMeters(
-          playerCoordinate,
+          collectionCoordinate,
           destination
         );
 
@@ -2260,7 +2788,8 @@ export function useHomeBackupCompanions(
 
 
       if (
-        isMovingTooFast
+        isMovingTooFast &&
+        !simulationCoordinateRef.current
       ) {
         return;
       }
@@ -2268,6 +2797,13 @@ export function useHomeBackupCompanions(
 
       companionCollectingRef.current =
         true;
+
+      if (simulationIntervalRef.current) {
+        clearInterval(simulationIntervalRef.current);
+        simulationIntervalRef.current = null;
+      }
+
+      simulationRunningRef.current = false;
 
 
       // Cancel any outstanding automatic reroute.
@@ -2284,8 +2820,26 @@ export function useHomeBackupCompanions(
 
           try {
 
+            Speech.stop();
+            Speech.speak(
+              `You have arrived at ${companion.name}. Companion found.`,
+              {
+                language:
+                  COMPANION_VOICE_LANGUAGE,
+                rate:
+                  COMPANION_VOICE_RATE,
+                pitch:
+                  COMPANION_VOICE_PITCH,
+              }
+            );
+
             await saveCollectedCompanion(
               userId,
+              companion
+            );
+
+
+            onCompanionCaptured?.(
               companion
             );
 
@@ -2326,7 +2880,7 @@ export function useHomeBackupCompanions(
               // ================================================
 
               setCompanionWalkerCoordinate(
-                playerCoordinate
+                collectionCoordinate
               );
 
 
@@ -2382,8 +2936,9 @@ export function useHomeBackupCompanions(
 
 
               if (
+                !onCompanionCaptured &&
                 Platform.OS !==
-                "web"
+                  "web"
               ) {
 
                 Alert.alert(
@@ -2402,7 +2957,7 @@ export function useHomeBackupCompanions(
             // ==================================================
 
             setCompanionWalkerCoordinate(
-              playerCoordinate
+              collectionCoordinate
             );
 
 
@@ -2447,10 +3002,12 @@ export function useHomeBackupCompanions(
               false;
 
 
-            Alert.alert(
-              "COMPANION FOUND",
-              `${companion.name} has been added to your Companion collection.`
-            );
+            if (!onCompanionCaptured) {
+              Alert.alert(
+                "COMPANION FOUND",
+                `${companion.name} has been added to your Companion collection.`
+              );
+            }
 
           } catch (
             error
@@ -2479,7 +3036,9 @@ export function useHomeBackupCompanions(
       activeCompanionIndex,
       companionDestinations,
       companionSearchState,
+      companionWalkerCoordinate,
       isMovingTooFast,
+      onCompanionCaptured,
       playerCoordinate,
       selectedCompanions,
       userId,

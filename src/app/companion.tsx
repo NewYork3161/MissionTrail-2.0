@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { MissionBottomTabBar } from '@/components/mission-bottom-tab-bar';
 import Companion3DViewer from '@/components/Companion3DViewer';
@@ -67,6 +68,18 @@ type FoodShopItem = {
 };
 
 type FoodShopMap = Record<string, FoodShopItem>;
+
+const DEMO_CAPTURED_COMPANION_STORAGE_KEY =
+  '@missiontrail/demo-captured-companion';
+
+type DemoCapturedCompanion = {
+  captured: boolean;
+  id?: string;
+  companionKey?: string;
+  name?: string;
+  model?: string;
+  capturedAt?: string;
+};
 
 const companionImage = require('../../assets/images/tabIcons/companion.png');
 const explorerCoinImage = require('../../assets/images/MissionTrailsCoin/ExplorerCoins.png');
@@ -395,6 +408,52 @@ const PLAY_GAMES: {
 export default function CompanionScreen() {
   const safeArea = useSafeAreaInsets();
 
+  // Demo capture ownership is persisted by homebackup_companions.tsx.
+  // This keeps the egg visible until the walking/capture flow actually
+  // succeeds, then allows this screen to switch to Draggon.glb.
+  const [demoCapturedCompanion, setDemoCapturedCompanion] =
+    useState<DemoCapturedCompanion | null>(null);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadDemoCapturedCompanion() {
+      try {
+        const raw = await AsyncStorage.getItem(
+          DEMO_CAPTURED_COMPANION_STORAGE_KEY,
+        );
+
+        if (!isActive) return;
+
+        if (!raw) {
+          setDemoCapturedCompanion(null);
+          return;
+        }
+
+        const parsed = JSON.parse(raw) as DemoCapturedCompanion;
+
+        setDemoCapturedCompanion(
+          parsed?.captured ? parsed : null,
+        );
+      } catch (error) {
+        console.warn(
+          '[Companion] Could not load demo capture state.',
+          error,
+        );
+
+        if (isActive) {
+          setDemoCapturedCompanion(null);
+        }
+      }
+    }
+
+    void loadDemoCapturedCompanion();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
   // Purpose: Receives the temporary companion from
   // the Egg Hatch presentation demo.
   const { demoCompanionId, companionId } =
@@ -568,10 +627,18 @@ export default function CompanionScreen() {
     ? getCompanionById(databaseCompanion.companion_key)
     : undefined;
 
+  const hasDemoCapturedCompanion =
+    Boolean(demoCapturedCompanion?.captured);
+
   const effectiveCompanionId =
     databaseCompanion?.companion_key ??
     companion?.companionId ??
-    demoCompanionDefinition?.id;
+    demoCompanionDefinition?.id ??
+    (hasDemoCapturedCompanion
+      ? demoCapturedCompanion?.companionKey ??
+        demoCapturedCompanion?.id ??
+        'crystal-drake'
+      : undefined);
 
   const isPresentationDemo = Boolean(
     !databaseCompanion &&
@@ -581,6 +648,9 @@ export default function CompanionScreen() {
 
   const companionName =
     databaseCompanion?.name ??
+    (hasDemoCapturedCompanion
+      ? demoCapturedCompanion?.name ?? 'Crystal Drake'
+      : undefined) ??
     formatCompanionName(effectiveCompanionId) ??
     demoCompanionDefinition?.name ??
     'Your Companion';
@@ -1264,7 +1334,11 @@ export default function CompanionScreen() {
           <HomeView
             companionName={companionName}
             companionDefinition={companionDefinition}
-            modelUrl={databaseModelUrl}
+            modelUrl={
+              hasDemoCapturedCompanion
+                ? demoCapturedCompanion?.model ?? '/glbModels/Draggon.glb'
+                : databaseModelUrl
+            }
             isLoading={isLoading || databaseCompanionLoading}
             hasCompanion={Boolean(effectiveCompanionId)}
             bondPercent={bondPercent}
@@ -1665,7 +1739,15 @@ function HomeView({
                   },
                 ]}
               >
-                <Companion3DViewer model={modelUrl ?? '/glbModels/TheMaintis.glb'} />
+                {hasCompanion ? (
+                  <Companion3DViewer
+                    model={modelUrl ?? '/glbModels/Draggon.glb'}
+                  />
+                ) : (
+                  <Companion3DViewer
+                    model="/glbModels/TheMaintis.glb"
+                  />
+                )}
               </Animated.View>
             </View>
           </LinearGradient>

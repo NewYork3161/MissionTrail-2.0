@@ -296,6 +296,18 @@ export default function HomeScreen() {
       mapRef,
       onError:
         location.setLocationError,
+
+      onCompanionCaptured:
+        (companion) => {
+          router.push({
+            pathname:
+              "/companion-card-capture",
+            params: {
+              companionName:
+                companion.name,
+            },
+          });
+        },
     });
 
   // =====================
@@ -994,7 +1006,9 @@ export default function HomeScreen() {
         companions.activeCompanionIndex
       }
       companionTrackingCoordinate={
-        location.liveCoordinate
+        companions.companionWalkerCoordinate ??
+        location.liveCoordinate ??
+        location.playerCoordinate
       }
       onSelectCompanion={
         companions.selectCompanion

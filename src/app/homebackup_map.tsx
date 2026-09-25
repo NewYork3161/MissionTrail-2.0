@@ -802,7 +802,7 @@ function renderCompanionSystem({
             <Polyline
               coordinates={companionRoute}
               strokeColor="#FF01E2"
-              strokeWidth={6}
+              strokeWidth={10}
             />
           ) : null}
 
